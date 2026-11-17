@@ -729,6 +729,9 @@ class ProjectAPI {
     let body = new FormData();
     body.set("record_id", variables.record_id);
     body.set("label", variables.label);
+    if (variables.confirm_key_exclusion === true) {
+      body.set("confirm_key_exclusion", "true");
+    }
 
     if (variables.tagValues && Array.isArray(variables.tagValues)) {
       body.set("tags", JSON.stringify(variables.tagValues));

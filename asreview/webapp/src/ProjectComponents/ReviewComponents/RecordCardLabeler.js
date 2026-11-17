@@ -7,6 +7,7 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
+  DialogContentText,
   DialogTitle,
   Divider,
   FormControlLabel,
@@ -257,6 +258,7 @@ const TagsDialog = ({
 const RecordCardLabeler = ({
   project_id,
   record_id,
+  isKeyStudy = false,
   label,
   labelFromDataset = null,
   tagsForm,
@@ -274,6 +276,7 @@ const RecordCardLabeler = ({
   const [editState] = useToggle(!(label === 1 || label === 0));
   const [showNotesDialog, toggleShowNotesDialog] = useToggle(false);
   const [showTagsDialog, toggleShowTagsDialog] = useToggle(false);
+  const [confirmKeyExclusion, setConfirmKeyExclusion] = React.useState(false);
   const [tagValuesState, setTagValuesState] = React.useState(
     mergeTagValues(tagsForm, tagValues),
   );
@@ -303,11 +306,12 @@ const RecordCardLabeler = ({
     setTagValuesState(tagValuesCopy);
   };
 
-  const makeDecision = (label) => {
+  const submitDecision = (nextLabel, confirmed = false) => {
     mutate({
       project_id: project_id,
       record_id: record_id,
-      label: label,
+      label: nextLabel,
+      confirm_key_exclusion: confirmed,
       tagValues: tagValuesState,
       retrain_model: retrainAfterDecision,
       post: editState,
@@ -317,11 +321,42 @@ const RecordCardLabeler = ({
   const [anchorEl, setAnchorEl] = React.useState(null);
   const openMenu = Boolean(anchorEl);
 
-  useHotkeys("r", () => hotkeys && !isLoading && !isSuccess && makeDecision(1));
-  useHotkeys("i", () => hotkeys && !isLoading && !isSuccess && makeDecision(0));
+  const makeDecision = (nextLabel) => {
+    if (confirmKeyExclusion) return;
+    if (isKeyStudy && nextLabel === 0 && label !== 0) {
+      setAnchorEl(null);
+      setConfirmKeyExclusion(true);
+      return;
+    }
+    submitDecision(nextLabel);
+  };
+
+  useHotkeys(
+    "r",
+    () =>
+      hotkeys &&
+      !confirmKeyExclusion &&
+      !isLoading &&
+      !isSuccess &&
+      makeDecision(1),
+  );
+  useHotkeys(
+    "i",
+    () =>
+      hotkeys &&
+      !confirmKeyExclusion &&
+      !isLoading &&
+      !isSuccess &&
+      makeDecision(0),
+  );
   useHotkeys(
     "n",
-    () => hotkeys && !isLoading && !isSuccess && toggleShowNotesDialog(),
+    () =>
+      hotkeys &&
+      !confirmKeyExclusion &&
+      !isLoading &&
+      !isSuccess &&
+      toggleShowNotesDialog(),
     { keyup: true },
   );
 
@@ -669,6 +704,37 @@ const RecordCardLabeler = ({
             onClose={toggleShowNotesDialog}
             note={note}
           />
+          <Dialog
+            open={confirmKeyExclusion}
+            onClose={() => setConfirmKeyExclusion(false)}
+            aria-labelledby="confirm-key-exclusion-title"
+            aria-describedby="confirm-key-exclusion-description"
+          >
+            <DialogTitle id="confirm-key-exclusion-title">
+              Exclude this seed article?
+            </DialogTitle>
+            <DialogContent>
+              <DialogContentText id="confirm-key-exclusion-description">
+                This is a predefined key study expected to be relevant. Confirm
+                that this is the intended decision. The key-study stopping
+                condition remains unmet while it is marked not relevant.
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button autoFocus onClick={() => setConfirmKeyExclusion(false)}>
+                Go back
+              </Button>
+              <Button
+                color="warning"
+                onClick={() => {
+                  setConfirmKeyExclusion(false);
+                  submitDecision(0, true);
+                }}
+              >
+                Confirm exclusion
+              </Button>
+            </DialogActions>
+          </Dialog>
           {Array.isArray(tagsForm) && tagsForm.length > 0 && (
             <TagsDialog
               project_id={project_id}

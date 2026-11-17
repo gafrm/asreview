@@ -633,9 +633,10 @@ def api_get_labeled(project):  # noqa: F401
         }
 
     records = project.db.input.get_records(state_data["record_id"].to_list())
+    safe_state = safe.load(project)
     result = []
     for (_, state), record in zip(state_data.iterrows(), records):
-        record_d = asdict(record)
+        record_d = safe.annotate_record(safe_state, asdict(record))
         record_d["state"] = state.to_dict()
         record_d["tags_form"] = read_tags_data(project)
 
@@ -1511,6 +1512,7 @@ def api_label_record(project, record_id):  # noqa: F401
 
     state = safe.load(project)
     old_label = None
+    key_exclusion = False
     if state:
         if record_id != route_record_id:
             raise ValueError("The requested record identifiers do not match.")
@@ -1535,6 +1537,20 @@ def api_label_record(project, record_id):  # noqa: F401
             raise ValueError("Only previously labeled records can be corrected.")
         else:
             old_label = int(existing.iloc[0]["label"])
+        with project.db as db:
+            record = safe.annotate_record(
+                state, asdict(db.input.get_records(record_id))
+            )
+        key_exclusion = record["is_key_study"] and label == 0 and old_label != 0
+        if key_exclusion and request.form.get("confirm_key_exclusion") != "true":
+            return (
+                jsonify(
+                    message="This is a predefined seed/key article. "
+                    "Confirm its exclusion first.",
+                    requires_key_exclusion_confirmation=True,
+                ),
+                409,
+            )
 
     with project.db as db:
         if request.method == "PUT":
@@ -1548,6 +1564,15 @@ def api_label_record(project, record_id):  # noqa: F401
             )
 
     if state:
+        if key_exclusion:
+            safe.event(
+                state,
+                "key_study_excluded",
+                record_id=record_id,
+                user_id=user_id,
+                previous_label=old_label,
+            )
+            safe.save(project, state)
         if old_label is not None and old_label != label:
             safe.invalidate_ranking(project, state, record_id, old_label, label)
         status = safe.refresh(project, state)
@@ -1560,7 +1585,7 @@ def api_label_record(project, record_id):  # noqa: F401
     else:
         with project.db as db:
             record = db.get_results_record(record_id)
-            item = asdict(db.input.get_records(record_id))
+            item = safe.annotate_record(state, asdict(db.input.get_records(record_id)))
         item["state"] = record.iloc[0].to_dict()
         item["tags_form"] = read_tags_data(project)
         item["state"]["user"] = None
@@ -1641,7 +1666,9 @@ def api_get_record(project):  # noqa: F401
                 else:
                     return jsonify({"result": None, "status": "setup"})
 
-        item = asdict(db.input.get_records(pending["record_id"].iloc[0]))
+        item = safe.annotate_record(
+            state, asdict(db.input.get_records(pending["record_id"].iloc[0]))
+        )
 
     item["state"] = pending.iloc[0].to_dict()
     item["tags_form"] = read_tags_data(project)

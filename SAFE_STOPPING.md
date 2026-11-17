@@ -11,6 +11,13 @@ enabled on a new, unlabeled project, before adding prior knowledge.
 2. Search for and select the predefined key studies present in that dataset.
    Selecting a study does not label it or change its position in the queue. If
    none are present, explicitly check the corresponding box.
+   Selected seed/key articles have an amber-tinted card, amber border and a
+   **Predefined key study (seed article)** banner when they appear during
+   screening or in the history. Excluding one requires an explicit confirmation,
+   including with the keyboard shortcut or when correcting a history decision.
+   Confirmed exclusions are logged; the article remains a key study and its
+   stopping condition remains unmet while it is excluded. Relevant decisions
+   remain manual and need only one click.
 3. Start SAFE screening. A seeded random order is saved in the project. Screen
    at least `max(200, ceil(N / 100))` units (capped at N), extending the random
    phase until at least one relevant and one irrelevant unit have been labeled.
@@ -30,6 +37,9 @@ enabled on a new, unlabeled project, before adding prior knowledge.
    counter starts after it. An inclusion resets the counter. A threshold above
    the dataset size is not silently capped: dataset exhaustion is reported as
    such, separately from meeting SAFE's conditions.
+   A compact tracker for all four conditions stays visible above the article:
+   green **Met** indicators and outlined **Pending** indicators show each
+   current count and target. **Show criteria** expands the calculation details.
 6. Click **Start ELAS l2 check**. Existing labels are preserved, pending unlabeled
    records are released, and screening waits for the new model's ranking. The
    exclusion counter starts from zero. An inclusion resets it. This phase also
@@ -118,8 +128,8 @@ the phase/ranking machinery without downloading the pretrained weights. The
 full ELAS l2 model and the Windows installation require a smoke test on the
 screening computer before production use.
 
-Development validation used Linux, Python 3.12 and Node.js 24: 20 SAFE unit/API
-tests, 5 React component tests and 68 core regression tests passed. The production
+Development validation used Linux, Python 3.12 and Node.js 24: 21 SAFE unit/API
+tests, 12 React component tests and 68 core regression tests passed. The production
 frontend compiled, and an independently installed wheel successfully imported
 the SAFE backend and served the compiled interface. The cloud browser could not
 reach the local development server, so a visual browser check remains part of

@@ -7,6 +7,7 @@ import {
   Card,
   CardContent,
   Checkbox,
+  Chip,
   FormControlLabel,
   LinearProgress,
   Stack,
@@ -15,11 +16,20 @@ import {
 } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "react-query";
 import { ProjectAPI } from "api";
+import CheckCircleOutline from "@mui/icons-material/CheckCircleOutline";
+import RadioButtonUnchecked from "@mui/icons-material/RadioButtonUnchecked";
 
 const phaseNames = {
   random: "Random sample",
   primary: "Primary screening · ELAS u4",
   secondary: "Second-model check · ELAS l2",
+};
+
+const criterionLabels = {
+  keys: "Key studies",
+  estimate: "Screened: 2× estimate",
+  fraction: "Screened: 10%",
+  streak: "Consecutive exclusions",
 };
 
 const refreshQueries = (client, project_id) => {
@@ -186,6 +196,31 @@ const SafeStopping = ({
           <Typography variant="h6">
             SAFE {status.paused ? "· Screening paused" : "automatic stopping"}
           </Typography>
+          {status.phase !== "random" && (
+            <Stack
+              direction="row"
+              useFlexGap
+              flexWrap="wrap"
+              spacing={1}
+              aria-label="Stopping conditions tracker"
+            >
+              {status.checks.map((check) => (
+                <Chip
+                  key={check.id}
+                  icon={
+                    check.met ? (
+                      <CheckCircleOutline />
+                    ) : (
+                      <RadioButtonUnchecked />
+                    )
+                  }
+                  color={check.met ? "success" : "default"}
+                  variant={check.met ? "filled" : "outlined"}
+                  label={`${check.met ? "Met" : "Pending"}: ${criterionLabels[check.id]} ${check.value}/${check.target ?? "—"}`}
+                />
+              ))}
+            </Stack>
+          )}
           {compact && !showDetails ? (
             <Typography variant="body2">
               {phaseNames[status.phase]} —{" "}

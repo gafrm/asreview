@@ -86,6 +86,53 @@ test("100 exclusions alone does not offer a phase transition", async () => {
   expect(button("Start ELAS l2")).toBeUndefined();
 });
 
+test("compact screening keeps all four condition statuses visible", async () => {
+  const checks = [
+    {
+      id: "keys",
+      label: "Key studies marked relevant",
+      value: 1,
+      target: 2,
+      met: false,
+    },
+    {
+      id: "estimate",
+      label: "Twice the estimate",
+      value: 400,
+      target: 300,
+      met: true,
+    },
+    {
+      id: "fraction",
+      label: "Ten percent",
+      value: 400,
+      target: 1234,
+      met: false,
+    },
+    {
+      id: "streak",
+      label: "Consecutive exclusions",
+      value: 73,
+      target: 100,
+      met: false,
+    },
+  ];
+  await render(
+    <SafeStopping project_id="test" status={status({ checks })} compact />,
+  );
+  const tracker = container.querySelector(
+    '[aria-label="Stopping conditions tracker"]',
+  );
+  expect(tracker.querySelectorAll(".MuiChip-root")).toHaveLength(4);
+  expect(tracker.textContent).toContain("Pending: Key studies 1/2");
+  expect(tracker.textContent).toContain("Met: Screened: 2× estimate 400/300");
+  expect(tracker.textContent).toContain("Pending: Screened: 10% 400/1234");
+  expect(tracker.textContent).toContain(
+    "Pending: Consecutive exclusions 73/100",
+  );
+  expect(button("Show criteria")).toBeDefined();
+});
+
 test("primary pause offers the second model and never an ignore-stop button", async () => {
   const paused = status({ stop: true, paused: true });
   ProjectAPI.transitionSafe.mockResolvedValue(

@@ -81,6 +81,13 @@ def results(project):
         return db.get_results_table().sort_values(["time", "record_id"], kind="stable")
 
 
+def annotate_record(state, record):
+    """Identify configured key studies, including other members of their group."""
+    group_id = record.get("group_id", record["record_id"])
+    record["is_key_study"] = bool(state and group_id in state["key_record_ids"])
+    return record
+
+
 def clear_pending(project):
     with project.db as db:
         for record_id in db.get_pending()["record_id"].tolist():

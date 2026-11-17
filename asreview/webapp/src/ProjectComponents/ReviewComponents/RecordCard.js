@@ -2,6 +2,8 @@ import { Link as LinkIcon } from "@mui/icons-material";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import {
+  Alert,
+  AlertTitle,
   Box,
   Button,
   Card,
@@ -14,6 +16,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import React from "react";
 
 import { StyledIconButton } from "StyledComponents/StyledButton";
@@ -184,12 +187,25 @@ const RecordCard = ({
         sx={{ mb: 3 }}
       />
       <Card
+        aria-label={record.is_key_study ? "Seed article" : "Screening article"}
         elevation={showBorder ? 4 : 0}
         sx={(theme) => ({
-          bgcolor: theme.palette.background.record,
+          bgcolor: record.is_key_study
+            ? alpha(theme.palette.warning.main, 0.12)
+            : theme.palette.background.record,
+          border: record.is_key_study
+            ? `3px solid ${theme.palette.warning.main}`
+            : undefined,
           borderRadius: !showBorder ? 0 : undefined,
         })}
       >
+        {record.is_key_study && (
+          <Alert severity="warning" sx={{ borderRadius: 0 }}>
+            <AlertTitle>Predefined key study (seed article)</AlertTitle>
+            This article is on the review's predefined key-study list and is
+            expected to be relevant. Check it carefully before excluding it.
+          </Alert>
+        )}
         <Grid
           container
           columns={5}
@@ -215,6 +231,7 @@ const RecordCard = ({
               }
               project_id={project_id}
               record_id={record.record_id}
+              isKeyStudy={record.is_key_study === true}
               label={record.state?.label}
               labelFromDataset={record.included}
               onDecisionClose={

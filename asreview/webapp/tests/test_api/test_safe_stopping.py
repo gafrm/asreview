@@ -3,6 +3,7 @@
 from io import BytesIO
 from unittest.mock import Mock
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -251,8 +252,9 @@ def test_small_dataset_exhaustion_and_duplicate_units(client_no_auth):
     assert status["key_record_ids"] == [0]
     assert status["total"] == 2
     assert status["sample_target"] == 2
-    screen(review, 1)
-    screen(review, 0)
+    for _ in range(2):
+        record = client_no_auth.get(url + "/get_record").json["result"]
+        screen(review, int(record["is_key_study"]))
     status = client_no_auth.get(url + "/get_record").json
     assert status["status"] == "safe_paused"
     assert status["stopping"]["exhausted"]
@@ -261,6 +263,51 @@ def test_small_dataset_exhaustion_and_duplicate_units(client_no_auth):
         assert len(db.get_results_table()) == 2
         assert len(db.get_results_table(groups=True)) == 3
     project.close()
+
+
+def test_key_article_marking_confirmation_and_history(review, monkeypatch):
+    client, project, url = review
+    monkeypatch.setattr(safe.secrets, "randbits", lambda _: 42)
+    key_id = int(np.random.default_rng(42).permutation(range(1000))[0])
+    response = client.post(url + "/safe", json={"key_record_ids": [key_id]})
+    assert response.status_code == 201
+    record = client.get(url + "/get_record").json["result"]
+    assert record["record_id"] == key_id and record["is_key_study"]
+    endpoint = url + f"/record/{key_id}"
+    decision = {"record_id": key_id, "label": 0}
+    # Clicking or a stale client cannot silently exclude a key article.
+    response = client.post(endpoint, data=decision)
+    assert response.status_code == 409
+    assert response.json["requires_key_exclusion_confirmation"]
+    assert safe.results(project).empty
+    assert client.get(url + "/get_record").json["result"]["record_id"] == key_id
+    decision["confirm_key_exclusion"] = "true"
+    assert client.post(endpoint, data=decision).status_code == 200
+    assert safe.results(project).iloc[0]["label"] == 0
+    events = safe.load(project)["events"]
+    assert sum(event["action"] == "key_study_excluded" for event in events) == 1
+    history = client.get(url + "/labeled").json["result"]
+    assert history[0]["is_key_study"]
+    # Editing tags on an already excluded key does not request another confirmation.
+    assert (
+        client.put(
+            endpoint, data={"record_id": key_id, "label": 0, "tags": "[]"}
+        ).status_code
+        == 200
+    )
+    # Including it needs no confirmation. Reversing that decision does.
+    included = client.put(endpoint, data={"record_id": key_id, "label": 1})
+    assert included.status_code == 200 and included.json["result"]["is_key_study"]
+    assert (
+        client.put(endpoint, data={"record_id": key_id, "label": 0}).status_code == 409
+    )
+    assert safe.results(project).iloc[0]["label"] == 1
+    assert client.put(endpoint, data=decision).status_code == 200
+    events = safe.load(project)["events"]
+    assert sum(event["action"] == "key_study_excluded" for event in events) == 2
+    other = client.get(url + "/get_record").json["result"]
+    assert not other["is_key_study"]
+    screen(review, 0)  # Ordinary records keep one-click exclusion.
 
 
 def test_secondary_clears_counter_forces_new_ranking_and_pauses(review, monkeypatch):
