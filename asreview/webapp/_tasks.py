@@ -15,9 +15,11 @@
 import sqlite3
 
 import asreview as asr
+from asreview.models import get_ai_config
 from asreview.models.queriers import TopDown
 from asreview.models.stoppers import IsFittable
 from asreview.simulation.simulate import Simulate
+from asreview.webapp import _safe_stopping as safe
 from asreview.webapp.utils import get_project_path
 
 
@@ -38,18 +40,30 @@ def run_task(project_id, simulation=False):
 
 
 def run_model(project):
-    with project.db as db:
-        if not db.exist_new_labeled_records:
+    with safe.project_lock(str(project.project_path)):
+        project.__dict__.pop("_config", None)
+        state = safe.load(project)
+        if state and state["phase"] == "random":
             return
+        generation = state["generation"] if state else None
+        cycle_data = (
+            get_ai_config(state["model"])["value"]
+            if state
+            else _read_cycle_data(project)
+        )
+        with project.db as db:
+            if not db.exist_new_labeled_records and not (state and not state["ready"]):
+                return
 
-        labeled = db.get_results_table(columns=["record_id", "label"])
-        # Only train a new model if both 0 and 1 labels are available:
-        if labeled["label"].value_counts().shape[0] < 2:
-            return
+            labeled = db.get_results_table(columns=["record_id", "label"])
+            if labeled["label"].nunique() < 2:
+                if state:
+                    project.set_review_error(
+                        ValueError("Training needs both label classes.")
+                    )
+                return
 
     try:
-        cycle_data = _read_cycle_data(project)
-
         if cycle_data.feature_extractor:
             try:
                 fm = project.get_feature_matrix(cycle_data.feature_extractor)
@@ -59,7 +73,12 @@ def run_model(project):
             except ValueError:
                 cycle = asr.ActiveLearningCycle.from_meta(cycle_data)
                 fm = cycle.transform(project.db.input.get_df())
-                project.add_feature_matrix(fm, cycle.feature_extractor.name)
+                with safe.project_lock(str(project.project_path)):
+                    current = safe.load(project)
+                    if (current["generation"] if current else None) != generation:
+                        return
+                    project.__dict__.pop("_config", None)
+                    project.add_feature_matrix(fm, cycle.feature_extractor.name)
         else:
             cycle = asr.ActiveLearningCycle.from_meta(cycle_data)
             fm = project.db.input.get_df().values
@@ -72,26 +91,49 @@ def run_model(project):
 
         ranked_record_ids = cycle.rank(fm)
 
-        with project.db as db:
-            db.add_last_ranking(
-                ranked_record_ids,
-                cycle_data.classifier if cycle_data.classifier is not None else None,
-                cycle_data.querier,
-                cycle_data.balancer if cycle_data.balancer is not None else None,
-                cycle_data.feature_extractor
-                if cycle_data.feature_extractor is not None
-                else None,
-                len(labeled),
-            )
-
-        project.remove_review_error()
+        with safe.project_lock(str(project.project_path)):
+            current = safe.load(project)
+            if (current["generation"] if current else None) != generation:
+                return  # An old model must not overwrite the next phase's ranking.
+            with project.db as db:
+                previous = db.get_last_ranking_table()["training_set"].dropna()
+                if current and current["ready"] and not previous.empty:
+                    if previous.max() > len(labeled):
+                        return  # Another job already trained on more decisions.
+                db.add_last_ranking(
+                    ranked_record_ids,
+                    cycle_data.classifier
+                    if cycle_data.classifier is not None
+                    else None,
+                    cycle_data.querier,
+                    cycle_data.balancer if cycle_data.balancer is not None else None,
+                    cycle_data.feature_extractor
+                    if cycle_data.feature_extractor is not None
+                    else None,
+                    len(labeled),
+                )
+            if current and not current["ready"]:
+                current["ready"] = True
+                safe.event(
+                    current,
+                    "ranking_ready",
+                    phase=current["phase"],
+                    model=current["model"],
+                    training_set=len(labeled),
+                )
+                safe.save(project, current)
+            project.remove_review_error()
 
     except Exception as err:
         # Transient SQLite lock contention is self-healing: the next label event
         # re-triggers training, so don't surface it as an error to the user.
         if isinstance(err, sqlite3.OperationalError) and "locked" in str(err).lower():
             return
-        project.set_review_error(err)
+        with safe.project_lock(str(project.project_path)):
+            current = safe.load(project)
+            if (current["generation"] if current else None) != generation:
+                return
+            project.set_review_error(err)
         raise err
 
 

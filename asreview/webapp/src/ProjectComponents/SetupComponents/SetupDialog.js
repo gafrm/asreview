@@ -28,6 +28,7 @@ import { ProjectAPI } from "api";
 import { ProjectContext } from "context/ProjectContext";
 import { projectModes, projectStatuses } from "globals.js";
 import { Save, Edit } from "@mui/icons-material";
+import { SafeSetup } from "../SafeStopping";
 
 const DialogProjectName = ({ project_id, dataset_name }) => {
   const [state, setState] = React.useState({
@@ -190,6 +191,10 @@ const SetupDialog = ({ project_id, mode, open, onClose }) => {
                     </Box>
                   </Collapse>
 
+                  <SafeSetup
+                    project_id={data.id}
+                    onStarted={() => navigate(`/reviews/${data.id}/reviewer`)}
+                  />
                   <Box sx={{ textAlign: "center", my: 2 }}>
                     <Button onClick={() => setShowSettings(!showSettings)}>
                       {showSettings ? "Show dataset" : "Show options"}

@@ -34,10 +34,10 @@ import numpy as np
 import pandas as pd
 from flask import Blueprint
 from flask import abort
+from flask import after_this_request
 from flask import current_app
 from flask import jsonify
 from flask import request
-from flask import after_this_request
 from flask import send_file
 from flask_login import current_user
 from sklearn.feature_extraction.text import CountVectorizer
@@ -72,6 +72,7 @@ from asreview.project.migration import detect_version
 from asreview.project.migration import migrate_project
 from asreview.utils import _get_filename_from_url
 from asreview.webapp import DB
+from asreview.webapp import _safe_stopping as safe
 from asreview.webapp._api.utils import add_id_to_tags
 from asreview.webapp._api.utils import get_all_model_components
 from asreview.webapp._api.utils import read_tags_data
@@ -158,6 +159,20 @@ def _run_model(project):
             run_simulation(project)
         else:
             run_model(project)
+
+
+def _request_safe_training(project, status):
+    if status["phase"] != "random" and not status["paused"]:
+        if not status["ready"] and project.error_path.exists():
+            return  # Leave a failed initial/model-switch job for explicit retry.
+        try:
+            _run_model(project)
+        except Exception as err:
+            # A saved screening decision must not appear to have failed merely
+            # because the background worker is unavailable. The paused training
+            # screen exposes the error and a retry action.
+            project.set_review_error(err)
+            logging.exception(err)
 
 
 def generate_invitation_token(project):
@@ -717,8 +732,12 @@ def api_get_learner(project):  # noqa: F401
 @bp.route("/projects/<project_id>/learner", methods=["POST", "PUT"])
 @login_required
 @project_authorization
+@safe.serialized
 def api_set_learner(project):  # noqa: F401
     """Set the learner used in the project"""
+
+    if safe.load(project):
+        raise ValueError("SAFE manages model changes. Use the SAFE phase controls.")
 
     name = request.form.get("name", "custom")
 
@@ -772,8 +791,16 @@ def api_get_wordcounts(project):  # noqa: F401
 @bp.route("/projects/<project_id>/train", methods=["POST"])
 @login_required
 @project_authorization
+@safe.serialized
 def api_train(project):  # noqa: F401
     """Start training of first model or simulation."""
+
+    if state := safe.load(project):
+        if request.form.get("ranking"):
+            raise ValueError("SAFE does not permit bypassing its phase ranking.")
+        status = safe.refresh(project, state)
+        _request_safe_training(project, status)
+        return jsonify({"success": True})
 
     if ranking := request.form.get("ranking", type=str, default=None):
         _fill_last_ranking(project, ranking)
@@ -811,6 +838,7 @@ def api_get_review(project):  # noqa: F401
 @bp.route("/projects/<project_id>/review", methods=["PUT"])
 @login_required
 @project_authorization
+@safe.serialized
 def api_update_review_status(project):
     """Update the status of the review.
 
@@ -832,6 +860,18 @@ def api_update_review_status(project):
     trigger_model = request.form.get("trigger_model", type=bool, default=False)
 
     current_status = project.config["review"]["status"]
+
+    if state := safe.load(project):
+        safe_status = safe.refresh(project, state)
+        if status == "finished" and not (
+            safe_status["exhausted"]
+            or (safe_status["phase"] == "secondary" and safe_status["stop"])
+        ):
+            raise ValueError("Complete both SAFE screening phases before finishing.")
+        if status not in ("review", "finished"):
+            raise ValueError("Invalid review status for a SAFE project.")
+        project.update_review(status=status)
+        return jsonify({"status": status}), 201
 
     if current_status == "setup" and status == "review":
         is_simulation = project.config["mode"] == asr.Project.MODE_SIMULATE
@@ -1334,8 +1374,11 @@ def api_get_metrics(project):
 @bp.route("/projects/<project_id>/stopping", methods=["GET"])
 @login_required
 @project_authorization
+@safe.serialized
 def api_get_stopper(project):  # noqa: F401
     """Get stopper of a project"""
+    if state := safe.load(project):
+        return jsonify(safe.refresh(project, state))
     cycle = ActiveLearningCycleData(**project.get_model_config())
     stopper = ActiveLearningCycle.from_meta(cycle).stopper
 
@@ -1369,8 +1412,12 @@ def api_get_stopper(project):  # noqa: F401
 @bp.route("/projects/<project_id>/stopping", methods=["POST", "PUT"])
 @login_required
 @project_authorization
+@safe.serialized
 def api_mutate_stopper(project):  # noqa: F401
     """Mutate stopper of a project"""
+
+    if safe.load(project):
+        raise ValueError("The SAFE stopping rule cannot be replaced by a threshold.")
 
     model_config = project.get_model_config()
     model_config["stopper"] = NConsecutiveIrrelevant.name
@@ -1378,6 +1425,34 @@ def api_mutate_stopper(project):  # noqa: F401
     project.update_review(model=model_config)
 
     return api_get_stopper(project.project_id)
+
+
+@bp.route("/projects/<project_id>/safe", methods=["POST"])
+@login_required
+@project_authorization
+@safe.serialized
+def api_configure_safe(project):
+    payload = request.get_json()
+    if not isinstance(payload, dict):
+        raise ValueError("SAFE configuration must be an object.")
+    state = safe.configure(project, payload)
+    return jsonify(safe.refresh(project, state)), 201
+
+
+@bp.route("/projects/<project_id>/safe/transition", methods=["POST"])
+@login_required
+@project_authorization
+@safe.serialized
+def api_transition_safe(project):
+    state = safe.load(project)
+    if not state:
+        raise ValueError("SAFE is not configured for this project.")
+    payload = request.get_json()
+    if not isinstance(payload, dict):
+        raise ValueError("SAFE action must be an object.")
+    status = safe.transition(project, state, payload.get("action"))
+    _request_safe_training(project, status)
+    return jsonify(safe.refresh(project, safe.load(project)))
 
 
 @bp.route("/projects/<project_id>/progress_data", methods=["GET"])
@@ -1409,6 +1484,7 @@ def api_get_progress_data(project):  # Consolidated endpoint
 @bp.route("/projects/<project_id>/record/<record_id>", methods=["POST", "PUT"])
 @login_required
 @project_authorization
+@safe.serialized
 def api_label_record(project, record_id):  # noqa: F401
     """Label item
 
@@ -1419,6 +1495,7 @@ def api_label_record(project, record_id):  # noqa: F401
     in the background.
     """
     # return the combination of document_id and label.
+    route_record_id = int(record_id)
     record_id = int(request.form.get("record_id"))
     label = int(request.form.get("label"))
     tags = json.loads(request.form.get("tags", "[]"))
@@ -1432,6 +1509,33 @@ def api_label_record(project, record_id):  # noqa: F401
         current_user.id if current_app.config.get("AUTHENTICATION", True) else None
     )
 
+    state = safe.load(project)
+    old_label = None
+    if state:
+        if record_id != route_record_id:
+            raise ValueError("The requested record identifiers do not match.")
+        status = safe.refresh(project, state)
+        with project.db as db:
+            existing = db.get_results_record(record_id)
+            pending = db.get_pending()
+        already_labeled = not existing.empty and existing["label"].notna().all()
+        if request.method == "POST":
+            if status["paused"] or not status["ready"]:
+                return (
+                    jsonify(message="SAFE has paused screening.", stopping=status),
+                    409,
+                )
+            if project.review["status"] == "finished":
+                raise ValueError("This project is finished.")
+            if already_labeled or record_id not in pending["record_id"].tolist():
+                raise ValueError(
+                    "This record is no longer pending. Reload screening."
+                )
+        elif not already_labeled:
+            raise ValueError("Only previously labeled records can be corrected.")
+        else:
+            old_label = int(existing.iloc[0]["label"])
+
     with project.db as db:
         if request.method == "PUT":
             db.update_result(record_id, label=label, tags=tags, user_id=user_id)
@@ -1443,7 +1547,12 @@ def api_label_record(project, record_id):  # noqa: F401
                 user_id=user_id,
             )
 
-    if retrain_model:
+    if state:
+        if old_label is not None and old_label != label:
+            safe.invalidate_ranking(project, state, record_id, old_label, label)
+        status = safe.refresh(project, state)
+        _request_safe_training(project, status)
+    elif retrain_model:
         _run_model(project)
 
     if request.method == "POST":
@@ -1476,6 +1585,7 @@ def api_update_note(project, record_id):  # noqa: F401
 @bp.route("/projects/<project_id>/get_record", methods=["GET"])
 @login_required
 @project_authorization
+@safe.serialized
 def api_get_record(project):  # noqa: F401
     """Retrieve unlabeled record in order of review."""
 
@@ -1486,8 +1596,38 @@ def api_get_record(project):  # noqa: F401
     if project.config["review"]["status"] == "finished":
         return jsonify({"result": None, "status": "finished"})
 
+    state = safe.load(project)
+    if state:
+        status = safe.refresh(project, state)
+        if status["paused"] or not status["ready"]:
+            if not status["ready"] and not status["paused"]:
+                _request_safe_training(project, status)
+                status = safe.refresh(project, safe.load(project))
+            if status["paused"] or not status["ready"]:
+                payload = {
+                    "result": None,
+                    "stopping": status,
+                    "status": "safe_paused" if status["paused"] else "safe_training",
+                }
+                try:
+                    payload["error"] = project.get_review_error()
+                except ValueError:
+                    pass
+                return jsonify(payload)
+        if state["phase"] == "random":
+            # Recreate the seeded queue if enabling SAFE was interrupted.
+            with project.db as db:
+                ranking = db.get_last_ranking_table()
+                if ranking["record_id"].tolist() != state["random_order"]:
+                    safe.clear_pending(project)
+                    db.add_last_ranking(
+                        state["random_order"], None, "random", None, None
+                    )
+
     with project.db as db:
-        pending = db.get_pending(user_id=user_id)
+        # SAFE uses one shared pending record: two tabs cannot screen across a
+        # stopping boundary using independently prefetched records.
+        pending = db.get_pending(user_id=None if state else user_id)
 
         if pending.empty:
             try:
@@ -1513,7 +1653,10 @@ def api_get_record(project):  # noqa: F401
     except ValueError:
         pass
 
-    return jsonify({"result": item, "status": "review"})
+    payload = {"result": item, "status": "review"}
+    if state:
+        payload["stopping"] = safe.refresh(project, safe.load(project))
+    return jsonify(payload)
 
 
 @bp.route("/projects/<project_id>/delete", methods=["DELETE"])

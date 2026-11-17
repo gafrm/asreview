@@ -24,8 +24,21 @@ import React from "react";
 import { useMutation, useQuery, useQueryClient } from "react-query";
 import { StyledLightBulb } from "StyledComponents/StyledLightBulb";
 import StoppingReachedDialog from "../ReviewComponents/StoppingReachedDialog";
+import SafeStopping from "../SafeStopping";
 
 const StoppingSuggestion = ({ project_id }) => {
+  const { data } = useQuery(
+    ["fetchStopping", { project_id }],
+    ProjectAPI.fetchStopping,
+  );
+  return data?.id === "safe" ? (
+    <SafeStopping project_id={project_id} status={data} />
+  ) : (
+    <LegacyStoppingSuggestion project_id={project_id} />
+  );
+};
+
+const LegacyStoppingSuggestion = ({ project_id }) => {
   const theme = useTheme();
   const queryClient = useQueryClient();
   const [stoppingRuleThreshold, setStoppingRuleThreshold] =

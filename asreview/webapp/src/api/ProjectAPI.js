@@ -626,6 +626,32 @@ class ProjectAPI {
     });
   }
 
+  static configureSafe({ project_id, key_record_ids, no_key_studies }) {
+    return axios
+      .post(
+        api_url + `projects/${project_id}/safe`,
+        { key_record_ids, no_key_studies },
+        { withCredentials: true },
+      )
+      .then((result) => result.data)
+      .catch((error) => {
+        throw axiosErrorHandler(error);
+      });
+  }
+
+  static transitionSafe({ project_id, action }) {
+    return axios
+      .post(
+        api_url + `projects/${project_id}/safe/transition`,
+        { action },
+        { withCredentials: true },
+      )
+      .then((result) => result.data)
+      .catch((error) => {
+        throw axiosErrorHandler(error);
+      });
+  }
+
   static fetchTagGroups({ queryKey }) {
     const { project_id } = queryKey[1];
     const url = api_url + `projects/${project_id}/tags`;
