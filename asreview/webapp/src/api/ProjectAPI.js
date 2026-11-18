@@ -626,11 +626,24 @@ class ProjectAPI {
     });
   }
 
-  static configureSafe({ project_id, key_record_ids, no_key_studies }) {
+  static previewSeedImport({ project_id, file }) {
+    const body = new FormData();
+    body.set("file", file);
+    return axios
+      .post(api_url + `projects/${project_id}/safe/seed-import`, body, {
+        withCredentials: true,
+      })
+      .then((result) => result.data)
+      .catch((error) => {
+        throw axiosErrorHandler(error);
+      });
+  }
+
+  static configureSafe({ project_id, key_record_ids, no_key_studies, seed_import }) {
     return axios
       .post(
         api_url + `projects/${project_id}/safe`,
-        { key_record_ids, no_key_studies },
+        { key_record_ids, no_key_studies, seed_import },
         { withCredentials: true },
       )
       .then((result) => result.data)

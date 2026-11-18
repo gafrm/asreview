@@ -49,6 +49,112 @@ def enable(review):
     return response.json
 
 
+def test_seed_import_preview_configuration_and_export(review, tmp_path):
+    client, project, url = review
+    content = b"title\nPublication number 5 topic 5\nNot in this dataset\n"
+    response = client.post(
+        url + "/safe/seed-import",
+        data={
+            "file": (BytesIO(content), "seed_articles.csv"),
+        },
+    )
+    assert response.status_code == 200, response.json
+    rows = response.json["rows"]
+    assert [row["status"] for row in rows] == ["matched", "missing"]
+    assert rows[0]["match"]["record_id"] == 5
+    assert safe.results(project).empty
+    assert safe.load(project) is None
+    report = {
+        "filename": "seed_articles.csv",
+        "entries": [
+            {"title": rows[0]["title"], "record_id": 5},
+            {"title": rows[1]["title"]},
+        ],
+    }
+    payload = {"key_record_ids": [5], "seed_import": report}
+    assert client.post(url + "/safe", json=payload).status_code == 400
+    assert safe.load(project) is None
+    report["entries"][1]["not_present"] = True
+    response = client.post(url + "/safe", json=payload)
+    assert response.status_code == 201, response.json
+    assert safe.results(project).empty
+    assert safe.load(project)["key_record_ids"] == [5]
+    assert (
+        safe.load(project)["seed_import"]["entries"][1]["resolution"] == "not_present"
+    )
+    export = tmp_path / "seed_import.asreview"
+    project.export(export)
+    restored = asr.Project.load(export, tmp_path / "restored_seeds")
+    assert safe.load(restored)["seed_import"] == safe.load(project)["seed_import"]
+    restored.close()
+    assert (
+        client.post(
+            url + "/safe/seed-import",
+            data={
+                "file": (BytesIO(content), "seeds.csv"),
+            },
+        ).status_code
+        == 400
+    )
+
+
+def test_seed_ris_import_and_invalid_uploads(review):
+    client, project, url = review
+    response = client.post(
+        url + "/safe/seed-import",
+        data={
+            "file": (
+                BytesIO(b"TY  - JOUR\nTI  - Publication number 8 topic 8\nER  - \n"),
+                "seeds.ris",
+            ),
+        },
+    )
+    assert response.status_code == 200, response.json
+    assert response.json["rows"][0]["match"]["record_id"] == 8
+    assert client.post(url + "/safe/seed-import").status_code == 400
+    assert (
+        client.post(
+            url + "/safe/seed-import",
+            data={
+                "file": (BytesIO(b"filename\npaper.pdf\n"), "bad.csv"),
+            },
+        ).status_code
+        == 400
+    )
+    assert safe.load(project) is None
+    assert safe.results(project).empty
+
+
+def test_seed_doi_matches_the_imported_dataset_metadata(client_no_auth):
+    response = client_no_auth.post(
+        "/api/projects/create",
+        data={
+            "mode": "oracle",
+            "file": (
+                BytesIO(
+                    b"title,abstract,doi,authors,year\n"
+                    b"First paper,First abstract,10.1234/first,Smith,2020\n"
+                    b"Second paper,Second abstract,10.1234/second,Jones,2021\n"
+                ),
+                "dataset.csv",
+            ),
+        },
+    )
+    assert response.status_code == 201, response.json
+    response = client_no_auth.post(
+        f"/api/projects/{response.json['id']}/safe/seed-import",
+        data={
+            "file": (BytesIO(b"DOI\nhttps://doi.org/10.1234/SECOND\n"), "seeds.csv"),
+        },
+    )
+    assert response.status_code == 200, response.json
+    row = response.json["rows"][0]
+    assert row["status"] == "matched"
+    assert row["method"] == "doi"
+    assert row["match"]["title"] == "Second paper"
+    assert "Jones" in row["match"]["authors"]
+
+
 def screen(review, label):
     client, project, url = review
     response = client.get(url + "/get_record")

@@ -8,7 +8,8 @@ enabled on a new, unlabeled project, before adding prior knowledge.
 ## Screening procedure
 
 1. Upload the dataset. Use separate projects for the English and French datasets.
-2. Search for and select the predefined key studies present in that dataset.
+2. Click **Import seed list (CSV/RIS)** to upload your predefined key studies,
+   or search for and select individual studies present in that dataset.
    Selecting a study does not label it or change its position in the queue. If
    none are present, explicitly check the corresponding box.
    Selected seed/key articles have an amber-tinted card, amber border and a
@@ -54,6 +55,40 @@ and key-study checks use one representative per duplicate group. This avoids
 counting an inherited duplicate label as another independent screening decision.
 The interface reports this number as *screening units*; retain it with the
 original import count when reporting the review.
+
+## Importing a seed list
+
+Upload a CSV or RIS bibliography before starting SAFE. For CSV, use a `doi`
+column, a `title` column, or both; `authors` and `year` are optional. Column
+names are case-insensitive. Comma, semicolon and tab separators are supported.
+Each entry needs at least a DOI or title. A CSV exported from Excel should use
+UTF-8; UTF-16 with a byte-order mark and Windows-1252 are also accepted.
+RIS uses the normal title, DOI, author and year fields. Labels embedded in a
+RIS bibliography are ignored: seed selection never labels an article.
+The limit is 1,000 seed entries and 2 MB per file.
+
+- Unique DOI matches are selected automatically. DOI URLs and `doi:` prefixes
+  are normalized. Without a DOI match, an exact normalized title can match;
+  capitalization, punctuation and whitespace differences are ignored.
+- Records in the same duplicate group count as one match. Repeated entries in
+  the seed file do not multiply the stopping target.
+- Conflicting DOI/title information, multiple matching studies and unmatched
+  titles need review. Near titles are never accepted automatically. Select a
+  suggested record or search the dataset by title/author to resolve the entry.
+- If a study is absent, explicitly check **I confirm this study is not present
+  in this dataset**. It is retained in the import report but does not count
+  toward the key-study target. If all are absent, also confirm the empty list.
+- **Review matched studies** lets you inspect and correct automatic matches.
+  **Clear import** removes that file's selections, retaining separately selected
+  studies. Uploading another file replaces the previous imported list.
+
+Every entry must be resolved before **Start SAFE screening** becomes available.
+Importing does not insert missing articles, alter the random sample, or change
+any relevance labels. When SAFE starts, the project records the source filename,
+seed metadata, match decisions, manual resolutions and confirmed absences in
+`safe-stopping.json`; these travel with `.asreview` exports. Keep your original
+CSV/RIS file with the review materials. Import previews are not saved until
+SAFE starts, so upload again if you leave or refresh the setup page.
 
 ## Corrections, restarts and concurrent tabs
 
@@ -117,7 +152,7 @@ CYPRESS_INSTALL_BINARY=0 HUSKY=0 npm ci
 npm run build
 CI=true npm test -- --watchAll=false --runInBand SafeStopping.test.js
 cd ../..
-.venv/bin/python -m pytest tests/test_safe_stopping.py asreview/webapp/tests/test_api/test_safe_stopping.py
+.venv/bin/python -m pytest tests/test_safe_stopping.py tests/test_safe_seed_import.py asreview/webapp/tests/test_api/test_safe_stopping.py
 ```
 
 The API tests exercise real primary TF-IDF/SVM training, the four-condition
@@ -128,8 +163,9 @@ the phase/ranking machinery without downloading the pretrained weights. The
 full ELAS l2 model and the Windows installation require a smoke test on the
 screening computer before production use.
 
-Development validation used Linux, Python 3.12 and Node.js 24: 21 SAFE unit/API
-tests, 12 React component tests and 68 core regression tests passed. The production
+Development validation used Linux, Python 3.12 and Node.js 24: 43 SAFE/matching
+unit/API tests and 18 React component tests passed. The 68 core regression tests
+passed during the initial SAFE implementation. The production
 frontend compiled, and an independently installed wheel successfully imported
 the SAFE backend and served the compiled interface. The cloud browser could not
 reach the local development server, so a visual browser check remains part of

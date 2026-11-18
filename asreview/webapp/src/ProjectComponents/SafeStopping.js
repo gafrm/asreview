@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "react-query";
 import { ProjectAPI } from "api";
 import CheckCircleOutline from "@mui/icons-material/CheckCircleOutline";
 import RadioButtonUnchecked from "@mui/icons-material/RadioButtonUnchecked";
+import SeedImport from "./SeedImport";
 
 const phaseNames = {
   random: "Random sample",
@@ -48,6 +49,19 @@ export const SafeSetup = ({ project_id, onStarted }) => {
   const [keyword, setKeyword] = React.useState("");
   const [keys, setKeys] = React.useState([]);
   const [noKeys, setNoKeys] = React.useState(false);
+  const [seedImport, setSeedImport] = React.useState(null);
+  const [importBusy, setImportBusy] = React.useState(false);
+  const importedKeys =
+    seedImport?.rows.filter((row) => row.selected).map((row) => row.selected) ||
+    [];
+  const allKeys = Array.from(
+    new Map(
+      [...keys, ...importedKeys].map((record) => [record.record_id, record]),
+    ).values(),
+  );
+  const unresolvedImport = seedImport?.rows.some(
+    (row) => !row.selected && !row.not_present,
+  );
   const { data: matches, isLoading } = useQuery(
     ["fetchPriorSearch", { project_id, keyword }],
     ProjectAPI.fetchPriorSearch,
@@ -73,14 +87,25 @@ export const SafeSetup = ({ project_id, onStarted }) => {
           </Typography>
           <Typography variant="body2">
             Enable this before adding prior knowledge or screening. Select the
-            predefined key studies present in this dataset; selecting a study
-            does not label it. Duplicate groups count as one screening unit.
+            predefined key studies present in this dataset, using an imported
+            list or the search field below; selecting a study does not label it.
+            Duplicate groups count as one screening unit.
           </Typography>
+          <SeedImport
+            project_id={project_id}
+            value={seedImport}
+            onChange={(report) => {
+              setSeedImport(report);
+              if (report) setNoKeys(false);
+            }}
+            onBusy={setImportBusy}
+            disabled={configure.isLoading}
+          />
           <Autocomplete
             multiple
             options={matches?.result || []}
             value={keys}
-            disabled={noKeys || configure.isLoading}
+            disabled={noKeys || configure.isLoading || importBusy}
             loading={isLoading && keyword.length >= 2}
             filterOptions={(options) => options}
             isOptionEqualToValue={(a, b) => a.record_id === b.record_id}
@@ -97,7 +122,12 @@ export const SafeSetup = ({ project_id, onStarted }) => {
             control={
               <Checkbox
                 checked={noKeys}
-                disabled={configure.isLoading}
+                disabled={
+                  configure.isLoading ||
+                  importBusy ||
+                  importedKeys.length > 0 ||
+                  unresolvedImport
+                }
                 onChange={(event) => {
                   setNoKeys(event.target.checked);
                   setKeys([]);
@@ -106,17 +136,39 @@ export const SafeSetup = ({ project_id, onStarted }) => {
             }
             label="No predefined key studies are present in this dataset"
           />
+          <Typography variant="body2">
+            {allKeys.length} records selected as key studies. Duplicate groups
+            count once.
+          </Typography>
           {configure.isError && (
             <Alert severity="error">{configure.error?.message}</Alert>
           )}
           <Button
             variant="contained"
-            disabled={configure.isLoading || (!noKeys && keys.length === 0)}
+            disabled={
+              configure.isLoading ||
+              importBusy ||
+              unresolvedImport ||
+              (!noKeys && allKeys.length === 0)
+            }
             onClick={() =>
               configure.mutate({
                 project_id,
-                key_record_ids: keys.map((key) => key.record_id),
+                key_record_ids: allKeys.map((key) => key.record_id),
                 no_key_studies: noKeys,
+                ...(seedImport && {
+                  seed_import: {
+                    filename: seedImport.filename,
+                    entries: seedImport.rows.map((row) => ({
+                      doi: row.doi,
+                      title: row.title,
+                      authors: row.authors,
+                      year: row.year,
+                      record_id: row.selected?.record_id ?? null,
+                      not_present: row.not_present,
+                    })),
+                  },
+                }),
               })
             }
           >

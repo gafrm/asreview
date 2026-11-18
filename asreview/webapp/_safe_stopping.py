@@ -21,6 +21,7 @@ from filelock import FileLock
 
 from asreview.extensions import load_extension
 from asreview.models import get_ai_config
+from asreview.webapp import _safe_seed_import as seed_import
 
 STATE_FILE = "safe-stopping.json"
 N_CONSECUTIVE = 100
@@ -127,6 +128,11 @@ def configure(project, payload):
     keys = sorted({int(group_map[x]) for x in keys})
     if not keys and payload.get("no_key_studies") is not True:
         raise ValueError("Select key studies, or confirm none are present.")
+    imported = None
+    if payload.get("seed_import") is not None:
+        with project.db as db:
+            dataset = db.input[["record_id", "group_id", *seed_import.FIELDS]]
+        imported = seed_import.import_audit(payload["seed_import"], dataset, keys)
     seed = secrets.randbits(32)
     order = np.random.default_rng(seed).permutation(ids).tolist()
     state = {
@@ -146,6 +152,9 @@ def configure(project, payload):
         "events": [],
     }
     event(state, "enabled", key_record_ids=keys, random_seed=seed)
+    if imported is not None:
+        state["seed_import"] = imported
+        event(state, "seed_list_imported", **imported)
     # Save the guard before changing the queue. Recovery reconstructs this exact
     # seeded order if configuration is interrupted.
     save(project, state)

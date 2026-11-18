@@ -72,6 +72,7 @@ from asreview.project.migration import detect_version
 from asreview.project.migration import migrate_project
 from asreview.utils import _get_filename_from_url
 from asreview.webapp import DB
+from asreview.webapp import _safe_seed_import as seed_import
 from asreview.webapp import _safe_stopping as safe
 from asreview.webapp._api.utils import add_id_to_tags
 from asreview.webapp._api.utils import get_all_model_components
@@ -1426,6 +1427,27 @@ def api_mutate_stopper(project):  # noqa: F401
     project.update_review(model=model_config)
 
     return api_get_stopper(project.project_id)
+
+
+@bp.route("/projects/<project_id>/safe/seed-import", methods=["POST"])
+@login_required
+@project_authorization
+@safe.serialized
+def api_preview_seed_import(project):
+    if safe.load(project) or not safe.results(project).empty:
+        raise ValueError(
+            "Import the seed list before starting SAFE or labeling records."
+        )
+    uploaded = request.files.get("file")
+    if uploaded is None or not uploaded.filename:
+        raise ValueError("Choose a CSV or RIS seed list.")
+    entries = seed_import.parse_file(
+        uploaded.filename, uploaded.stream.read(seed_import.MAX_BYTES + 1)
+    )
+    with project.db as db:
+        dataset = db.input[["record_id", "group_id", *seed_import.FIELDS]]
+    matches = seed_import.match_entries(entries, dataset)
+    return jsonify(filename=uploaded.filename, rows=matches)
 
 
 @bp.route("/projects/<project_id>/safe", methods=["POST"])

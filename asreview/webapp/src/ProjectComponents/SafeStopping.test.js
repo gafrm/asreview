@@ -10,6 +10,7 @@ jest.mock("api", () => ({
     fetchPriorSearch: jest.fn(),
     configureSafe: jest.fn(),
     transitionSafe: jest.fn(),
+    previewSeedImport: jest.fn(),
   },
 }));
 
@@ -188,4 +189,189 @@ test("setup requires explicit key-study selection or an explicit empty list", as
     no_key_studies: true,
   });
   expect(started).toHaveBeenCalledTimes(1);
+});
+
+const seedRecord = {
+  record_id: 7,
+  group_id: 7,
+  title: "Known relevant study",
+  doi: "10.1234/a",
+};
+const seedRow = (overrides = {}) => ({
+  id: 0,
+  title: seedRecord.title,
+  doi: seedRecord.doi,
+  authors: "",
+  year: "",
+  status: "matched",
+  method: "doi",
+  reason: "Matched by DOI.",
+  match: seedRecord,
+  candidates: [seedRecord],
+  candidate_count: 1,
+  ...overrides,
+});
+const importSeeds = async (rows) => {
+  ProjectAPI.previewSeedImport.mockResolvedValue({
+    filename: "seeds.csv",
+    rows,
+  });
+  const file = new File(
+    ["doi,title\n10.1234/a,Known relevant study"],
+    "seeds.csv",
+    { type: "text/csv" },
+  );
+  await act(async () => {
+    const input = container.querySelector('input[type="file"]');
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [file],
+    });
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  return file;
+};
+
+test("seed upload selects exact matches, deduplicates records and submits the audit", async () => {
+  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random" }));
+  await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
+  const file = await importSeeds([seedRow(), seedRow({ id: 1 })]);
+  expect(ProjectAPI.previewSeedImport).toHaveBeenCalledWith({
+    project_id: "test",
+    file,
+  });
+  expect(container.textContent).toContain("2 automatically matched");
+  expect(container.textContent).toContain("1 records selected as key studies");
+  expect(button("Start SAFE screening").disabled).toBe(false);
+  await act(async () => button("Start SAFE screening").click());
+  const payload = ProjectAPI.configureSafe.mock.calls[0][0];
+  expect(payload.key_record_ids).toEqual([7]);
+  expect(payload.seed_import.entries).toHaveLength(2);
+  expect(payload.seed_import.entries[0]).toEqual({
+    title: seedRecord.title,
+    doi: seedRecord.doi,
+    authors: "",
+    year: "",
+    record_id: 7,
+    not_present: false,
+  });
+});
+
+test("missing seeds block starting until absence is explicitly recorded", async () => {
+  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random" }));
+  await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
+  await importSeeds([
+    seedRow(),
+    seedRow({
+      id: 1,
+      title: "Missing study",
+      doi: "",
+      status: "missing",
+      match: null,
+      candidates: [],
+      candidate_count: 0,
+    }),
+  ]);
+  expect(button("Start SAFE screening").disabled).toBe(true);
+  const row = container.querySelector('[aria-label="Seed entry 2"]');
+  await act(async () => row.querySelector('input[type="checkbox"]').click());
+  expect(button("Start SAFE screening").disabled).toBe(false);
+  await act(async () => button("Start SAFE screening").click());
+  expect(
+    ProjectAPI.configureSafe.mock.calls[0][0].seed_import.entries[1],
+  ).toMatchObject({
+    title: "Missing study",
+    record_id: null,
+    not_present: true,
+  });
+});
+
+test("an ambiguous seed can be resolved from its suggested records", async () => {
+  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random" }));
+  await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
+  await importSeeds([seedRow({ status: "ambiguous", match: null })]);
+  expect(button("Start SAFE screening").disabled).toBe(true);
+  const input = container.querySelector(
+    '[aria-label="Seed entry 1"] input[role="combobox"]',
+  );
+  await act(async () => {
+    input.focus();
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        code: "ArrowDown",
+        bubbles: true,
+      }),
+    );
+  });
+  await act(async () => document.querySelector('[role="option"]').click());
+  expect(button("Start SAFE screening").disabled).toBe(false);
+  await act(async () => button("Start SAFE screening").click());
+  expect(ProjectAPI.configureSafe.mock.calls[0][0].key_record_ids).toEqual([7]);
+});
+
+test("matched records can be inspected and clearing the import removes their selection", async () => {
+  await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
+  await importSeeds([seedRow()]);
+  expect(container.querySelector('[aria-label="Seed entry 1"]')).toBeNull();
+  await act(async () => button("Review matched studies").click());
+  expect(
+    container.querySelector('[aria-label="Seed entry 1"]').textContent,
+  ).toContain(seedRecord.title);
+  await act(async () => button("Clear import").click());
+  expect(button("Start SAFE screening").disabled).toBe(true);
+  expect(container.textContent).toContain("0 records selected as key studies");
+});
+
+test("an unmatched seed can be linked through a manual title search", async () => {
+  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random" }));
+  await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
+  await importSeeds([
+    seedRow({
+      status: "missing",
+      match: null,
+      candidates: [],
+      candidate_count: 0,
+    }),
+  ]);
+  ProjectAPI.fetchPriorSearch.mockResolvedValue({ result: [seedRecord] });
+  const input = container.querySelector(
+    '[aria-label="Seed entry 1"] input[role="combobox"]',
+  );
+  await act(async () => {
+    input.focus();
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    ).set.call(input, "Known relevant");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  expect(ProjectAPI.fetchPriorSearch).toHaveBeenCalled();
+  await act(async () => document.querySelector('[role="option"]').click());
+  await act(async () => button("Start SAFE screening").click());
+  expect(
+    ProjectAPI.configureSafe.mock.calls[0][0].seed_import.entries[0],
+  ).toMatchObject({
+    record_id: 7,
+    not_present: false,
+  });
+});
+
+test("a failed upload blocks starting until cleared even with the empty-list option checked", async () => {
+  await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
+  await act(async () =>
+    container.querySelector('input[type="checkbox"]').click(),
+  );
+  expect(button("Start SAFE screening").disabled).toBe(false);
+  ProjectAPI.previewSeedImport.mockRejectedValueOnce(
+    new Error("CSV needs a DOI or title column"),
+  );
+  const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+  await importSeeds([]);
+  expect(container.textContent).toContain("CSV needs a DOI or title column");
+  expect(button("Start SAFE screening").disabled).toBe(true);
+  await act(async () => button("Clear import").click());
+  expect(button("Start SAFE screening").disabled).toBe(false);
+  errorSpy.mockRestore();
 });
