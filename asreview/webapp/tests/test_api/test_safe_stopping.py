@@ -41,7 +41,7 @@ def review(client_no_auth, monkeypatch):
 
 
 def enable(review):
-    client, project, url = review
+    client, _project, url = review
     response = client.post(
         url + "/safe", json={"key_record_ids": [], "no_key_studies": True}
     )
@@ -156,7 +156,7 @@ def test_seed_doi_matches_the_imported_dataset_metadata(client_no_auth):
 
 
 def screen(review, label):
-    client, project, url = review
+    client, _project, url = review
     response = client.get(url + "/get_record")
     assert response.status_code == 200, response.json
     assert response.json["status"] == "review", response.json
@@ -305,7 +305,7 @@ def test_unavailable_secondary_model_does_not_change_phase(review, monkeypatch):
 
 
 def test_old_training_job_cannot_replace_new_phase_ranking(review, monkeypatch):
-    client, project, url = review
+    _client, project, _url = review
     enable(review)
     with project.db as db:
         for i, record_id in enumerate(safe.load(project)["random_order"][:200]):
