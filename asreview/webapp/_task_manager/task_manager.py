@@ -118,6 +118,7 @@ class TaskManager:
 
         self.client_thread = None
         self.client_conn = None
+        self._client_connections = []
 
     def _migrate_created_at_column(self):
         """Add created_at column if it doesn't exist (for existing deployments)."""
@@ -441,53 +442,62 @@ class TaskManager:
 
         self.server_socket.settimeout(1.0)
 
+        shutdown_requested = False
+
         def _signal_handler(signum, frame):
-            logger.info(f"Shutting down task manager due to signal {signum}")
-            self.stop_manager(mp_shutdown_event)
+            nonlocal shutdown_requested
+            # Windows sends console Ctrl+C to the LAB parent and its child.
+            # In managed mode the parent signals us after HTTP workers stop.
+            if mp_shutdown_event is not None and signum == signal.SIGINT:
+                return
+            shutdown_requested = True
 
-        signal.signal(signal.SIGINT, _signal_handler)
-        signal.signal(signal.SIGTERM, _signal_handler)
+        def should_stop():
+            return shutdown_requested or (
+                mp_shutdown_event is not None and mp_shutdown_event.is_set()
+            )
 
-        while mp_shutdown_event is None or not mp_shutdown_event.is_set():
-            try:
-                # Accept incoming connections with a timeout
-                conn, _ = self.server_socket.accept()
-                # Start a new thread to handle the client connection
-                client_thread = threading.Thread(
-                    target=self._handle_incoming_messages, args=(conn,)
-                )
-                # client_thread.daemon = True
-                client_thread.start()
-                # Store the latest client thread and conn
-                self.client_thread = client_thread
-                self.client_conn = conn
+        previous_handlers = {
+            sig: signal.signal(sig, _signal_handler)
+            for sig in (signal.SIGINT, signal.SIGTERM)
+        }
 
-            except TimeoutError:
-                # No incoming connections => perform handling queue
-                self._process_buffer()
-                # Pop tasks from database into 'pending'
-                self.pop_waiting_queue()
-                # continue to check for shutdown conditions
-                continue
-
-            except OSError as e:
-                if e.errno == errno.EBADF:
-                    # Socket was closed, exit loop silently
+        try:
+            while not should_stop():
+                try:
+                    conn, _ = self.server_socket.accept()
+                    if should_stop():
+                        conn.close()
+                        break
+                    client_thread = threading.Thread(
+                        target=self._handle_incoming_messages, args=(conn,)
+                    )
+                    client_thread.start()
+                    self.client_thread = client_thread
+                    self.client_conn = conn
+                    self._client_connections = [
+                        (thread, connection)
+                        for thread, connection in self._client_connections
+                        if thread.is_alive()
+                    ]
+                    self._client_connections.append((client_thread, conn))
+                except TimeoutError:
+                    if should_stop():
+                        break
+                    self._process_buffer()
+                    if not should_stop():
+                        self.pop_waiting_queue()
+                except OSError as e:
+                    if e.errno == errno.EBADF:
+                        break
+                    logger.error(f"Socket error occurred: {e}")
                     break
-                logger.error(f"Socket error occurred: {e}")
-                break  # Exit the loop if the socket is closed
-
-        # After exiting main loop, clean up client thread
-        if self.client_thread and self.client_conn:
+        finally:
             try:
-                self.client_conn.shutdown(socket.SHUT_RDWR)
-            except Exception:
-                pass
-            try:
-                self.client_conn.close()
-            except Exception:
-                pass
-            self.client_thread.join(timeout=1.0)
+                self.stop_manager(mp_shutdown_event)
+            finally:
+                for sig, handler in previous_handlers.items():
+                    signal.signal(sig, handler)
 
     def stop_manager(self, mp_shutdown_event=None):
         """Gracefully stop the manager and close the socket."""
@@ -508,26 +518,28 @@ class TaskManager:
                 self.server_socket = None
         logger.info("Task manager has been stopped.")
 
-        # Close the database session
+        # Unblock every outstanding client before releasing the database.
+        for thread, conn in self._client_connections:
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                conn.close()
+            except OSError:
+                pass
+            thread.join(timeout=1.0)
+        self._client_connections.clear()
+        self.client_thread = None
+        self.client_conn = None
 
-        if self.session:
+        # Only the manager loop accesses the session. That loop has exited.
+        if self.session is not None:
             try:
                 self.session.close()
             except Exception as e:
                 logger.error(f"Failed to close database session: {e}")
             self.session = None
-
-        # After closing server socket and DB session, also clean up client thread
-        if getattr(self, "client_thread", None) and getattr(self, "client_conn", None):
-            try:
-                self.client_conn.shutdown(socket.SHUT_RDWR)
-            except Exception:
-                pass
-            try:
-                self.client_conn.close()
-            except Exception:
-                pass
-            self.client_thread.join(timeout=1.0)
 
 
 def run_task_manager(
