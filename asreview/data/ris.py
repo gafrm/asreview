@@ -25,6 +25,7 @@ import pandas as pd
 import rispy
 
 from asreview.data.base import BaseReader
+from asreview.data.utils import convert_value_to_int
 from asreview.data.utils import convert_value_to_list
 from asreview.utils import _is_url
 
@@ -227,7 +228,20 @@ class RISReader(BaseReader):
         if "year" not in df.columns:
             df["year"] = None
 
-        df["year"] = df["year"].apply(extract_year)
+        def extract_primary_year(value):
+            if pd.isna(value) or not str(value).strip():
+                return None
+            # Explicit missing-date sentinel used by some bibliographic exports.
+            if str(value).strip() in ("0001", "0001-01-01"):
+                return None
+            year = extract_year(value)
+            if year is not None:
+                return year
+            # Preserve the original integer validator's error for malformed PY
+            # fields instead of silently treating invalid data as missing.
+            return convert_value_to_int(value)
+
+        df["year"] = df["year"].apply(extract_primary_year)
 
         for column in ("publication_year", "date"):
             if column in df.columns:
