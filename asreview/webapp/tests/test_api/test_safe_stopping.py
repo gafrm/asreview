@@ -474,3 +474,63 @@ def test_secondary_clears_counter_forces_new_ranking_and_pauses(review, monkeypa
     assert response.json["value"] == 0
     with project.db as db:
         assert db.get_results_record(secondary_id).iloc[0]["label"] == 1
+
+
+def test_custom_parameters_persist_and_cannot_be_reconfigured(review, tmp_path):
+    client, project, url = review
+    parameters = {
+        "sample_minimum": 12,
+        "sample_percent": 2,
+        "estimate_multiplier": 1,
+        "screened_percent": 3,
+        "primary_exclusions": 15,
+        "secondary_exclusions": 7,
+    }
+    payload = {
+        "key_record_ids": [],
+        "no_key_studies": True,
+        "parameters": parameters,
+    }
+    invalid = {**payload, "parameters": {"sample_percent": 101}}
+    assert client.post(url + "/safe", json=invalid).status_code == 400
+    assert safe.load(project) is None
+    response = client.post(url + "/safe", json=payload)
+    assert response.status_code == 201, response.json
+    assert response.json["parameters"] == parameters
+    assert response.json["sample_target"] == 20
+    assert safe.load(project)["parameters"] == parameters
+    changed = {**payload, "parameters": {"primary_exclusions": 1}}
+    assert client.post(url + "/safe", json=changed).status_code == 400
+    assert client.post(url + "/stopping", data={"n": 1}).status_code == 400
+
+    for i in range(19):
+        screen(review, int(i == 0))
+    assert client.get(url + "/stopping").json["phase"] == "random"
+    screen(review, 0)
+    status = client.get(url + "/stopping").json
+    assert status["phase"] == "primary"
+    assert status["sample_count"] == 20
+    assert status["parameters"] == parameters
+    run_model(project)
+    for _ in range(29):
+        screen(review, 0)
+    assert not client.get(url + "/stopping").json["stop"]
+    screen(review, 0)
+    status = client.get(url + "/stopping").json
+    assert status["stop"]
+    assert status["screened"] == 50
+    assert status["value"] == 30
+
+    export = tmp_path / "custom.asreview"
+    project.export(export)
+    restored = asr.Project.load(export, tmp_path / "custom_restored")
+    try:
+        restored_state = safe.load(restored)
+        assert restored_state["parameters"] == parameters
+        assert restored_state["events"][0]["parameters"] == parameters
+        restored_status = safe.refresh(restored, restored_state)
+        assert restored_status["parameters"] == parameters
+        assert restored_status["stop"]
+        assert restored_status["screened"] == 50
+    finally:
+        restored.close()
