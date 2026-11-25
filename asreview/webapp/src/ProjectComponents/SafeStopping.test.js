@@ -187,6 +187,14 @@ test("setup requires explicit key-study selection or an explicit empty list", as
     project_id: "test",
     key_record_ids: [],
     no_key_studies: true,
+    parameters: {
+      sample_minimum: 200,
+      sample_percent: 1,
+      estimate_multiplier: 2,
+      screened_percent: 10,
+      primary_exclusions: 100,
+      secondary_exclusions: 100,
+    },
   });
   expect(started).toHaveBeenCalledTimes(1);
 });
@@ -374,4 +382,77 @@ test("a failed upload blocks starting until cleared even with the empty-list opt
   await act(async () => button("Clear import").click());
   expect(button("Start SAFE screening").disabled).toBe(false);
   errorSpy.mockRestore();
+});
+
+
+const changeNumber = async (label, value) => {
+  const field = [...container.querySelectorAll("input[type=number]")].find(
+    (input) => document.querySelector(`label[for="${input.id}"]`)?.textContent === label,
+  );
+  expect(field).toBeDefined();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")
+      .set.call(field, String(value));
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+
+test("custom thresholds are validated and sent as numbers", async () => {
+  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random" }));
+  await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
+  await act(async () => container.querySelector('input[type="checkbox"]').click());
+  await changeNumber("Random sample percentage", 101);
+  expect(button("Start SAFE screening").disabled).toBe(true);
+  await changeNumber("Random sample percentage", 5);
+  await changeNumber("Minimum random sample records", 20);
+  await changeNumber("Estimated relevant total multiplier", 3);
+  await changeNumber("Minimum percentage screened", 25);
+  await changeNumber("Primary consecutive exclusions", 15);
+  await changeNumber("Secondary consecutive exclusions", 7);
+  expect(button("Start SAFE screening").disabled).toBe(false);
+  await act(async () => button("Start SAFE screening").click());
+  expect(ProjectAPI.configureSafe).toHaveBeenCalledWith({
+    project_id: "test",
+    key_record_ids: [],
+    no_key_studies: true,
+    parameters: {
+      sample_minimum: 20,
+      sample_percent: 5,
+      estimate_multiplier: 3,
+      screened_percent: 25,
+      primary_exclusions: 15,
+      secondary_exclusions: 7,
+    },
+  });
+});
+
+test("restore defaults resets edited thresholds", async () => {
+  await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
+  await changeNumber("Primary consecutive exclusions", 15);
+  await act(async () => button("Restore default thresholds").click());
+  expect([...container.querySelectorAll("input[type=number]")].map(
+    (input) => Number(input.value),
+  )).toEqual([200, 1, 2, 10, 100, 100]);
+});
+
+test("compact tracker displays configured thresholds", async () => {
+  await render(
+    <SafeStopping
+      project_id="test"
+      compact
+      status={status({
+        value: 7,
+        params: { n: 15 },
+        parameters: { estimate_multiplier: 3, screened_percent: 25 },
+        checks: [
+          { id: "estimate", value: 200, target: 150, met: true },
+          { id: "fraction", value: 200, target: 250, met: false },
+          { id: "streak", value: 7, target: 15, met: false },
+        ],
+      })}
+    />,
+  );
+  expect(container.textContent).toContain("Screened: 3× estimate 200/150");
+  expect(container.textContent).toContain("Screened: 25% 200/250");
+  expect(container.textContent).toContain("7 / 15 consecutive exclusions");
 });
