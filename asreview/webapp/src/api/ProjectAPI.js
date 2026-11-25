@@ -639,11 +639,11 @@ class ProjectAPI {
       });
   }
 
-  static configureSafe({ project_id, key_record_ids, no_key_studies, seed_import }) {
+  static configureSafe({ project_id, key_record_ids, no_key_studies, seed_import, parameters }) {
     return axios
       .post(
         api_url + `projects/${project_id}/safe`,
-        { key_record_ids, no_key_studies, seed_import },
+        { key_record_ids, no_key_studies, seed_import, parameters },
         { withCredentials: true },
       )
       .then((result) => result.data)
