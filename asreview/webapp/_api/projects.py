@@ -55,7 +55,6 @@ from asreview.data import RISReader
 from asreview.data import TSVWriter
 from asreview.data.search import fuzzy_find
 from asreview.data.utils import convert_ris_list_columns_to_string
-from asreview.data.utils import duplicated
 from asreview.datasets import DatasetManager
 from asreview.extensions import extensions
 from asreview.extensions import load_extension
@@ -279,6 +278,10 @@ def api_get_projects(projects):
 def api_create_project():
     """Create a new project"""
 
+    deduplicate = request.form.get("automatic_deduplication", "true")
+    if deduplicate not in ("true", "false"):
+        return jsonify(message="Invalid automatic deduplication policy."), 400
+    deduplicate = deduplicate == "true"
     project_id = uuid4().hex
 
     with asr.Project.create(
@@ -292,15 +295,16 @@ def api_create_project():
 
         try:
             if request.form.get("plugin", None):
-                project.add_dataset(request.form["plugin"])
+                project.add_dataset(request.form["plugin"], deduplicate=deduplicate)
             elif request.form.get("benchmark", None):
-                project.add_dataset(request.form["benchmark"])
+                project.add_dataset(request.form["benchmark"], deduplicate=deduplicate)
             elif request.form.get("url", None):
-                project.add_dataset(request.form["url"])
+                project.add_dataset(request.form["url"], deduplicate=deduplicate)
             elif "file" in request.files:
                 project.add_dataset(
                     secure_filename(request.files["file"].filename),
                     file_writer=request.files["file"].save,
+                    deduplicate=deduplicate,
                 )
             else:
                 return jsonify(message="No file or dataset found to import."), 400
@@ -464,7 +468,8 @@ def api_get_project_data(project):
             "n_unlabeled": len(data) - n_relevant - n_irrelevant,
             "n_relevant": n_relevant,
             "n_irrelevant": n_irrelevant,
-            "n_duplicated": int(duplicated(data).sum()),
+            "n_duplicated": int((project.db.input["record_id"] != project.db.input["group_id"]).sum()),
+            "automatic_deduplication": project.config.get("automatic_deduplication", True),
             "n_missing_title": int(data.title.isnull().sum()),
             "n_missing_abstract": int(data.abstract.isnull().sum()),
             "n_urn": int(data.url.fillna(data.doi).notnull().sum()),
