@@ -244,7 +244,7 @@ class Project:
         self.config = config
         return config
 
-    def add_dataset(self, fp, dataset_id=None, file_writer=None):
+    def add_dataset(self, fp, dataset_id=None, file_writer=None, deduplicate=None):
         """Add a dataset to the project file.
 
         Parameters
@@ -253,6 +253,13 @@ class Project:
             Filepath to the dataset. It will be copied to the correct location in the
             project file.
         """
+        policy = self.config.get("automatic_deduplication", True)
+        if deduplicate is not None:
+            if type(deduplicate) is not bool:
+                raise ValueError("Deduplication policy must be a boolean.")
+            if self.config.get("datasets") and deduplicate != policy:
+                raise ValueError("Deduplication policy is locked after dataset import.")
+            policy = deduplicate
         if dataset_id is None:
             dataset_id = uuid4().hex
 
@@ -302,13 +309,15 @@ class Project:
             )
 
         self.db.input.add_records(records=records)
-        groups = identify_record_groups(records)
-        self.db.input.set_groups(groups)
+        if policy:
+            groups = identify_record_groups(records)
+            self.db.input.set_groups(groups)
 
         # This config update assumes that the project only has one dataset.
         self.update_config(
             name=file_name.rsplit(".", 1)[0],
             datasets=[{"id": dataset_id, "name": file_name}],
+            automatic_deduplication=policy,
         )
 
     def label_priors(self):
