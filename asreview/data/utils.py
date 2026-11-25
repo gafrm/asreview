@@ -23,7 +23,7 @@ def _clean_text(text):
     """Normalize text for duplicate detection.
 
     Removes whitespace, lowercases, and normalizes special characters
-    (e.g. accented letters, ligatures) to their ASCII equivalents.
+    (e.g. accented letters, ligatures) while retaining non-Latin letters.
     """
     if not text:
         return ""
@@ -32,7 +32,7 @@ def _clean_text(text):
     text = text.lower()
     # Keep only alphanumeric characters (removes punctuation, whitespace,
     # and combining marks left over from NFKD decomposition)
-    text = re.sub(r"[^a-z0-9]", "", text)
+    text = "".join(character for character in text if character.isalnum())
     return text
 
 
@@ -128,8 +128,7 @@ def duplicated(df, pid="doi"):
     s = (
         (s_title + " " + s_abstract)
         .str.strip()
-        .str.replace("[^A-Za-z0-9]", "", regex=True)
-        .str.lower()
+        .map(_clean_text)
         .str.strip()
         .replace("", None)
     )
