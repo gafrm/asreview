@@ -5,6 +5,33 @@ for human screening. Choose **Start SAFE screening** during project setup.
 Ordinary projects keep their existing workflow. SAFE is opt-in and must be
 enabled on a new, unlabeled project, before adding prior knowledge.
 
+## Configurable thresholds
+
+Before starting SAFE screening, set the six numerical parameters in the setup
+screen. The defaults below reproduce the submitted scoping-review protocol V2.
+
+| Parameter | Default |
+| --- | ---: |
+| Minimum random sample count | 200 |
+| Minimum random sample percentage | 1% |
+| Estimated relevant total multiplier | 2 |
+| Minimum percentage screened | 10% |
+| Primary consecutive exclusions (ELAS u4) | 100 |
+| Secondary consecutive exclusions (ELAS l2) | 100 |
+
+All six accept positive integers; percentages cannot exceed 100. The random
+sample target is the larger of the minimum count and the rounded-up percentage,
+capped at the number of screening units. Both relevance classes must still be
+represented before active learning starts. All four primary stopping conditions
+remain mandatory. The primary and secondary models remain ELAS u4 and ELAS l2.
+The setup screen can restore the defaults before screening starts.
+
+The server validates and locks the parameters when SAFE is enabled. The selected
+values are saved in `safe-stopping.json` and its configuration audit event,
+and survive project export and reimport. Existing projects without stored
+parameters retain the original defaults. Use a new project for a different
+configuration; do not edit the state file to change an ongoing review.
+
 ## Screening procedure
 
 1. Upload the dataset. Use separate projects for the English and French datasets.
@@ -19,13 +46,16 @@ enabled on a new, unlabeled project, before adding prior knowledge.
    Confirmed exclusions are logged; the article remains a key study and its
    stopping condition remains unmet while it is excluded. Relevant decisions
    remain manual and need only one click.
-3. Start SAFE screening. A seeded random order is saved in the project. Screen
-   at least `max(200, ceil(N / 100))` units (capped at N), extending the random
+3. Configure thresholds and start SAFE screening. A seeded random order is saved
+   in the project. With the defaults, screen at least
+   `max(200, ceil(N / 100))` units (capped at N), extending the random
    phase until at least one relevant and one irrelevant unit have been labeled.
 4. The application stores the sample membership and computes the preliminary
    relevant total as `N * sample_relevant / sample_screened`. It trains ELAS u4
    and waits for its ranking before serving the next record.
-5. Primary screening pauses automatically only when **all four** conditions hold:
+5. Primary screening pauses automatically only when **all four** conditions hold.
+   The following table shows the default thresholds; the evaluator and tracker
+   use the actual configured values:
 
    | Condition | Calculation |
    | --- | --- |
@@ -44,7 +74,8 @@ enabled on a new, unlabeled project, before adding prior knowledge.
 6. Click **Start ELAS l2 check**. Existing labels are preserved, pending unlabeled
    records are released, and screening waits for the new model's ranking. The
    exclusion counter starts from zero. An inclusion resets it. This phase also
-   pauses automatically at 100 consecutive new exclusions.
+   pauses automatically at the configured secondary threshold (default: 100)
+   consecutive new exclusions.
 7. Export the `.asreview` project and the screening decisions. **The independent
    TF-IDF/Naive Bayes quality-control review of exclusions and citation chaining
    are separate protocol steps; they are not automated by this change.** A
@@ -98,7 +129,8 @@ SAFE starts, so upload again if you leave or refresh the setup page.
 - Correcting a label forces a fresh ranking. If a primary label is corrected
   during the second-model phase and invalidates the original stop, screening
   pauses. **Return to ELAS u4 with a fresh counter** preserves all labels and
-  requires 100 new exclusions. Review the original decision before using it.
+  requires the configured primary exclusion streak (default: 100) anew.
+  Review the original decision before using it.
 - If corrections remove one of the random sample's two classes, screening
   remains blocked. Resolve incorrect labels or start a new project with the
   amended sampling procedure; the program does not invent an estimate.
@@ -108,7 +140,7 @@ SAFE starts, so upload again if you leave or refresh the setup page.
   submit a new decision past the stopping boundary. History corrections remain
   available through the normal history interface.
 - `safe-stopping.json` in the project stores the seed, sample membership, phase
-  boundaries, key studies, and timestamped events. ASReview's existing database
+  boundaries, key studies, configured parameters, and timestamped events. ASReview's existing database
   stores decisions and correction history. Export/reimport preserves both.
   Keep using this fork when reopening a SAFE project; upstream ASReview does
   not enforce this fork's additional state file.
@@ -117,7 +149,7 @@ SAFE starts, so upload again if you leave or refresh the setup page.
 
 ## Install on Windows
 
-Install Git, Python 3.12 (or 3.13), and Node.js 24.
+Install Git, Python 3.12 (or 3.13), and Node.js. The integration was built and tested on Windows with Node.js 20 (matching upstream CI at the time); the original implementation used Node.js 24 on Linux.
 Run these commands in PowerShell from the parent folder where you want the code:
 
 ```powershell
@@ -150,7 +182,7 @@ python -m venv .venv
 cd asreview/webapp
 CYPRESS_INSTALL_BINARY=0 HUSKY=0 npm ci
 npm run build
-CI=true npm test -- --watchAll=false --runInBand SafeStopping.test.js
+CI=true npm test -- --watchAll=false --runInBand SafeStopping.test.js SeedArticle.test.js
 cd ../..
 .venv/bin/python -m pytest tests/test_safe_stopping.py tests/test_safe_seed_import.py asreview/webapp/tests/test_api/test_safe_stopping.py
 ```
@@ -160,8 +192,8 @@ conjunction, exact thresholds, sample extension, corrections, queue enforcement,
 export/reimport, and phase changes. The second-model integration test substitutes
 a small feature extractor for the large downloaded embedding model; it tests
 the phase/ranking machinery without downloading the pretrained weights. The
-full ELAS l2 model and the Windows installation require a smoke test on the
-screening computer before production use.
+full ELAS l2 model still requires a smoke test on the screening computer before
+production use.
 
 Development validation used Linux, Python 3.12 and Node.js 24: 43 SAFE/matching
 unit/API tests and 18 React component tests passed. The 68 core regression tests
@@ -170,3 +202,30 @@ frontend compiled, and an independently installed wheel successfully imported
 the SAFE backend and served the compiled interface. The cloud browser could not
 reach the local development server, so a visual browser check remains part of
 the installation smoke test.
+
+
+### Integration validation (November 2026)
+
+The upstream merge and RIS corrections were validated on Windows with Python
+3.12 and Node.js 20. The subsequent configurable SAFE and shutdown changes
+passed targeted suites: 54 SAFE backend tests, 21 SAFE frontend tests, six
+LAB/shutdown tests, and 13 RIS normalization tests (across development runs).
+The user manually confirmed the compiled configurable interface and normal
+Windows shutdown. Shutdown cleanup is deferred until the serving loops exit;
+HTTP workers are stopped before their notification sockets are closed. Shutdown
+during active model training remains to be validated.
+
+The RIS importer normalizes slash-separated years, falls back to alternative
+title and date fields, and maps URL lists to the scalar URL field. A reader-level
+audit of 14,347 records found no missing source-available fields among titles,
+abstracts, authors, years, primary DOIs, primary URLs and keywords; one URL was
+truncated at a semicolon during parsing. Multiple DOI/URL values are not fully
+represented by the scalar database schema. Retain the source bibliography.
+A persisted-database audit remains outstanding.
+
+Known limitations: the upstream App.test.js suite fails to initialize with the
+react-markdown ESM dependency; this was reproduced in an unmodified upstream
+worktree. Dependency security advisories require assessment before shared
+deployment. The actual ELAS l2 model and visual seed highlighting require
+manual validation. These results are not a claim of complete production
+validation.
