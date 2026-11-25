@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { useMutation, useQuery } from "react-query";
 
@@ -9,6 +9,8 @@ import {
   Box,
   ButtonBase,
   CircularProgress,
+  Checkbox,
+  FormControlLabel,
   Paper,
   Stack,
   Typography,
@@ -44,6 +46,7 @@ const rejectStyle = {
 };
 
 const DatasetFromFile = ({ project_id, mode, setSetupProjectId }) => {
+  const [automaticDeduplication, setAutomaticDeduplication] = useState(true);
   const mobileScreen = useMediaQuery((theme) => theme.breakpoints.down("sm"));
   const {
     progress: uploadProgress,
@@ -83,11 +86,13 @@ const DatasetFromFile = ({ project_id, mode, setSetupProjectId }) => {
       addDataset({
         mode: mode,
         file: acceptedFiles[0],
+        automaticDeduplication,
         onUploadProgress: onUploadProgress,
       });
     },
     [
       addDataset,
+      automaticDeduplication,
       mode,
       isCreatingProjectError,
       resetAddDataset,
@@ -123,6 +128,7 @@ const DatasetFromFile = ({ project_id, mode, setSetupProjectId }) => {
     open,
   } = useDropzone({
     onDrop: onDrop,
+    disabled: isCreatingProject,
     multiple: false,
     noClick: true,
     accept: acceptedFileTypes,
@@ -154,6 +160,20 @@ const DatasetFromFile = ({ project_id, mode, setSetupProjectId }) => {
         justifyContent: "center",
       }}
     >
+      <FormControlLabel
+        control={
+          <Checkbox
+            checked={automaticDeduplication}
+            disabled={isCreatingProject}
+            onChange={(event) => setAutomaticDeduplication(event.target.checked)}
+          />
+        }
+        label="Automatically group duplicate records"
+      />
+      <Typography variant="caption" sx={{ mb: 2 }}>
+        Uncheck for an already deduplicated bibliography to retain every record
+        as an independent screening unit. This choice is locked at import.
+      </Typography>
       <Paper
         {...getRootProps()}
         elevation={0}
