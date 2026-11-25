@@ -24,6 +24,7 @@ from threading import Thread
 
 import requests
 from rich.console import Console
+from waitress import wasyncore
 from waitress.server import create_server
 
 import asreview as asr
@@ -91,6 +92,27 @@ def _open_browser_when_ready(host, port, start_url, console, timeout=60):
         console.print(
             f"\n[red]Error: Unable to connect to the server at {start_url} within the timeout period.[/red]\n"
         )
+
+
+def _serve_until_shutdown(server, socket_map, shutdown_requested):
+    """Poll without closing sockets from inside an asynchronous signal handler."""
+    while socket_map and not shutdown_requested():
+        wasyncore.loop(
+            timeout=0.2,
+            use_poll=server.adj.asyncore_use_poll,
+            map=socket_map,
+            count=1,
+        )
+
+
+def _close_http_server(server, socket_map):
+    """Stop request workers before closing their notification sockets."""
+    try:
+        server.task_dispatcher.shutdown(timeout=30)
+    finally:
+        # This includes the listening socket, trigger and accepted HTTP channels,
+        # for both single- and multiple-listener Waitress servers.
+        wasyncore.close_all(socket_map)
 
 
 def lab_entry_point(argv):
@@ -239,9 +261,13 @@ def lab_entry_point(argv):
         process.join()
         return
 
-    # Create the waitress server
+    # Keep an explicit socket map so we can finish request workers before
+    # closing both the server and its trigger on Windows.
+    socket_map = {}
     try:
-        server = create_server(app, host=args.host, port=port, threads=6)
+        server = create_server(
+            app, host=args.host, port=port, threads=6, map=socket_map
+        )
     except OSError as e:
         console.print(
             f"\n\n[red]Error: Unable to bind to {args.host}:{port} — {e}[/red]\n\n"
@@ -255,40 +281,39 @@ def lab_entry_point(argv):
             process.join()
         return
 
+    shutdown_requested = False
+
     def handle_sig(sig, frame):
-        console.print("ASReview LAB is shutting down...\n")
+        nonlocal shutdown_requested
+        # Signal handlers can interrupt the socket loop at any point. Do not
+        # close sockets or join processes from inside the handler.
+        shutdown_requested = True
 
-        # Close the server gracefully
-        server.close()
+    previous_handlers = {
+        sig: signal.signal(sig, handle_sig)
+        for sig in (signal.SIGINT, signal.SIGTERM)
+    }
 
-        # Signal the task server to shut down
-        shutdown_task_server.set()
-
-        if process.is_alive():
-            process.join(timeout=10)
-
-        if process.is_alive():
-            # If it didn't shut down gracefully, terminate it forcefully
-            console.print(
-                "[red]Background task manager did not shut down gracefully. "
-                "Terminating forcefully.[/red]\n\n"
-            )
-            process.terminate()
-            process.join()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, handle_sig)
-
-    # Start the server
     try:
-        server.run()
-    except OSError as e:
-        # Bug in waitress that raises OSError with errno 9
-        # when the server is closed with Ctrl+C
-        if e.errno == 9:
-            pass
-        else:
-            raise
+        _serve_until_shutdown(server, socket_map, lambda: shutdown_requested)
+    finally:
+        console.print("ASReview LAB is shutting down...\n")
+        try:
+            _close_http_server(server, socket_map)
+        finally:
+            shutdown_task_server.set()
+            try:
+                process.join(timeout=10)
+                if process.is_alive():
+                    console.print(
+                        "[red]Background task manager did not shut down gracefully. "
+                        "Terminating forcefully.[/red]\n\n"
+                    )
+                    process.terminate()
+                    process.join()
+            finally:
+                for sig, handler in previous_handlers.items():
+                    signal.signal(sig, handler)
 
     console.print("ASReview LAB shut down.\n\n")
 
