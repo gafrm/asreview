@@ -321,25 +321,24 @@ def refresh(project, state):
     """Recover transitions after a restart and record newly reached boundaries."""
     labeled = results(project)
     status = evaluate(state, labeled)
-    if state["phase"] == "random":
-        if (
-            len(labeled) >= state["sample_target"]
-            and labeled["label"].nunique() == 2
-            and not status["exhausted"]
-        ):
-            state["sample_ids"] = labeled["record_id"].astype(int).tolist()
-            state["phase_start_ids"] = state["sample_ids"].copy()
-            state["phase"] = "primary"
-            event(
-                state,
-                "random_sample_complete",
-                sample_ids=state["sample_ids"],
-                relevant=status["sample_relevant"],
-                estimated_relevant=status["estimated_relevant"],
-            )
-            set_model(project, state, "elas_u4")
-            save(project, state)
-            status = evaluate(state, labeled)
+    if state["phase"] == "random" and (
+        len(labeled) >= state["sample_target"]
+        and labeled["label"].nunique() == 2
+        and not status["exhausted"]
+    ):
+        state["sample_ids"] = labeled["record_id"].astype(int).tolist()
+        state["phase_start_ids"] = state["sample_ids"].copy()
+        state["phase"] = "primary"
+        event(
+            state,
+            "random_sample_complete",
+            sample_ids=state["sample_ids"],
+            relevant=status["sample_relevant"],
+            estimated_relevant=status["estimated_relevant"],
+        )
+        set_model(project, state, "elas_u4")
+        save(project, state)
+        status = evaluate(state, labeled)
     reached = bool(status["paused"])
     if reached != state.get("was_paused", False):
         state["was_paused"] = reached
