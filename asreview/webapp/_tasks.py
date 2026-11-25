@@ -97,9 +97,13 @@ def run_model(project):
                 return  # An old model must not overwrite the next phase's ranking.
             with project.db as db:
                 previous = db.get_last_ranking_table()["training_set"].dropna()
-                if current and current["ready"] and not previous.empty:
-                    if previous.max() > len(labeled):
-                        return  # Another job already trained on more decisions.
+                if (
+                    current
+                    and current["ready"]
+                    and not previous.empty
+                    and previous.max() > len(labeled)
+                ):
+                    return  # Another job already trained on more decisions.
                 db.add_last_ranking(
                     ranked_record_ids,
                     cycle_data.classifier
@@ -134,7 +138,7 @@ def run_model(project):
             if (current["generation"] if current else None) != generation:
                 return
             project.set_review_error(err)
-        raise err
+        raise
 
 
 def run_simulation(project):
@@ -161,7 +165,7 @@ def run_simulation(project):
         sim.review()
     except Exception as err:
         project.set_review_error(err)
-        raise err
+        raise
 
     project.update_review(status="finished")
     sim.to_sql(project.db_path)
