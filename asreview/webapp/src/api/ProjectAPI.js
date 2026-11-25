@@ -25,9 +25,6 @@ class ProjectAPI {
   static mutateInitProject(variables) {
     let body = new FormData();
     body.set("mode", variables.mode);
-    if (variables.automaticDeduplication !== undefined) {
-      body.set("automatic_deduplication", String(variables.automaticDeduplication));
-    }
 
     const url = api_url + `projects/info`;
     return new Promise((resolve, reject) => {
@@ -49,6 +46,9 @@ class ProjectAPI {
   static createProject(variables) {
     let body = new FormData();
     body.set("mode", variables.mode);
+    if (variables.automaticDeduplication !== undefined) {
+      body.set("automatic_deduplication", String(variables.automaticDeduplication));
+    }
 
     if (variables.file) {
       body.append("file", variables.file);
