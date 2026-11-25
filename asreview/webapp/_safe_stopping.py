@@ -7,7 +7,6 @@ All callers that mutate or serve screening state must hold ``project_lock``.
 
 import functools
 import json
-import math
 import os
 import secrets
 import tempfile
@@ -25,6 +24,33 @@ from asreview.webapp import _safe_seed_import as seed_import
 
 STATE_FILE = "safe-stopping.json"
 N_CONSECUTIVE = 100
+# Keep version-1 project defaults immutable for backward compatibility.
+DEFAULT_PARAMETERS = {
+    "sample_minimum": 200,
+    "sample_percent": 1,
+    "estimate_multiplier": 2,
+    "screened_percent": 10,
+    "primary_exclusions": 100,
+    "secondary_exclusions": 100,
+}
+
+
+def validate_parameters(parameters):
+    if not isinstance(parameters, dict):
+        raise ValueError("SAFE parameters must be an object.")
+    if set(parameters) - set(DEFAULT_PARAMETERS):
+        raise ValueError("Unknown SAFE parameter.")
+    result = {**DEFAULT_PARAMETERS, **parameters}
+    for key, value in result.items():
+        if type(value) is not int or value < 1:
+            raise ValueError(f"SAFE {key} must be a positive integer.")
+        if key in ("sample_percent", "screened_percent") and value > 100:
+            raise ValueError(f"SAFE {key} must not exceed 100.")
+    return result
+
+
+def parameters_for(state):
+    return validate_parameters(state.get("parameters", {}))
 
 
 @functools.lru_cache(maxsize=128)
@@ -133,6 +159,7 @@ def configure(project, payload):
         with project.db as db:
             dataset = db.input[["record_id", "group_id", *seed_import.FIELDS]]
         imported = seed_import.import_audit(payload["seed_import"], dataset, keys)
+    parameters = validate_parameters(payload.get("parameters", {}))
     seed = secrets.randbits(32)
     order = np.random.default_rng(seed).permutation(ids).tolist()
     state = {
@@ -145,13 +172,23 @@ def configure(project, payload):
         "key_record_ids": keys,
         "random_seed": seed,
         "random_order": order,
-        "sample_target": min(len(ids), max(200, math.ceil(len(ids) / 100))),
+        "parameters": parameters,
+        "sample_target": min(
+            len(ids),
+            max(
+                parameters["sample_minimum"],
+                (len(ids) * parameters["sample_percent"] + 99) // 100,
+            ),
+        ),
         "sample_ids": [],
         "phase_start_ids": [],
         "primary_stop_ids": [],
         "events": [],
     }
-    event(state, "enabled", key_record_ids=keys, random_seed=seed)
+    event(
+        state, "enabled", key_record_ids=keys, random_seed=seed,
+        parameters=parameters,
+    )
     if imported is not None:
         state["seed_import"] = imported
         event(state, "seed_list_imported", **imported)
@@ -191,9 +228,13 @@ def evaluate(state, labeled):
         and n_sample == len(sample_ids)
     )
     total = state["total"]
+    parameters = parameters_for(state)
+    multiplier = parameters["estimate_multiplier"]
+    fraction_target = (total * parameters["screened_percent"] + 99) // 100
+    streak_target = parameters["secondary_exclusions" if state["phase"] == "secondary" else "primary_exclusions"]
     estimate = total * n_relevant / n_sample if n_sample else None
     twice_estimate = (
-        (2 * total * n_relevant + n_sample - 1) // n_sample if n_sample else None
+        (multiplier * total * n_relevant + n_sample - 1) // n_sample if n_sample else None
     )
     key_found = sum(labels.get(x) == 1 for x in state["key_record_ids"])
     phase_labels = labeled[~labeled["record_id"].isin(state["phase_start_ids"])]
@@ -208,24 +249,24 @@ def evaluate(state, labeled):
         },
         {
             "id": "estimate",
-            "label": "Screened: twice the estimated relevant total",
+            "label": f"Screened: {multiplier}× the estimated relevant total",
             "value": len(labels),
             "target": twice_estimate,
             "met": sample_valid and len(labels) >= twice_estimate,
         },
         {
             "id": "fraction",
-            "label": "Screened: at least 10% of the dataset",
+            "label": f"Screened: at least {parameters['screened_percent']}% of the dataset",
             "value": len(labels),
-            "target": math.ceil(total / 10),
-            "met": len(labels) >= math.ceil(total / 10),
+            "target": fraction_target,
+            "met": len(labels) >= fraction_target,
         },
         {
             "id": "streak",
             "label": "Consecutive exclusions in this phase",
             "value": consecutive,
-            "target": N_CONSECUTIVE,
-            "met": consecutive >= N_CONSECUTIVE,
+            "target": streak_target,
+            "met": consecutive >= streak_target,
         },
     ]
     invalidated = False
@@ -239,8 +280,8 @@ def evaluate(state, labeled):
             sample_valid
             and checks[0]["met"]
             and len(primary) >= twice_estimate
-            and len(primary) >= math.ceil(total / 10)
-            and primary_streak >= N_CONSECUTIVE
+            and len(primary) >= fraction_target
+            and primary_streak >= parameters["primary_exclusions"]
         )
     exhausted = len(labels) >= total
     stop = (
@@ -254,7 +295,8 @@ def evaluate(state, labeled):
         "id": "safe",
         "phase": state["phase"],
         "model": state["model"],
-        "params": {"n": N_CONSECUTIVE},
+        "params": {"n": streak_target},
+        "parameters": parameters,
         "value": consecutive,
         "stop": bool(stop),
         "exhausted": exhausted,
