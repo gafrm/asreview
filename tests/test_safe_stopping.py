@@ -5,6 +5,7 @@ import pytest
 
 from asreview.models.stoppers import NConsecutiveIrrelevant
 from asreview.webapp._safe_stopping import evaluate
+from asreview.webapp._safe_stopping import validate_parameters
 
 
 def state(total=1000, phase="primary"):
@@ -111,3 +112,55 @@ def test_legacy_stopper_also_stops_at_exactly_n():
     stopper = NConsecutiveIrrelevant(100)
     assert not stopper.stop(pd.DataFrame({"label": [0] * 99}), range(1000))
     assert stopper.stop(pd.DataFrame({"label": [0] * 100}), range(1000))
+
+
+def test_custom_thresholds_and_phase_boundaries():
+    config = state(total=1000)
+    config["parameters"] = {
+        "primary_exclusions": 20,
+        "secondary_exclusions": 5,
+        "estimate_multiplier": 3,
+        "screened_percent": 22,
+    }
+    status = evaluate(config, labels(219))
+    assert not status["stop"]
+    assert status["checks"][1]["target"] == 150
+    assert status["checks"][2]["target"] == 220
+    assert status["checks"][3]["target"] == 20
+    assert evaluate(config, labels(220))["stop"]
+    config.update(
+        phase="secondary",
+        primary_start_ids=list(range(200)),
+        primary_stop_ids=list(range(220)),
+        phase_start_ids=list(range(220)),
+    )
+    assert not evaluate(config, labels(224))["stop"]
+    assert evaluate(config, labels(225))["stop"]
+    data = labels(225)
+    data.loc[219, "label"] = 1
+    assert evaluate(config, data)["primary_invalidated"]
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        None,
+        {"sample_minimum": 0},
+        {"sample_percent": 101},
+        {"screened_percent": -1},
+        {"estimate_multiplier": 1.5},
+        {"primary_exclusions": True},
+        {"secondary_exclusions": "100"},
+        {"unknown": 1},
+    ],
+)
+def test_invalid_parameters(parameters):
+    with pytest.raises(ValueError):
+        validate_parameters(parameters)
+
+
+def test_partial_parameters_keep_legacy_defaults():
+    params = validate_parameters({"secondary_exclusions": 25})
+    assert params["secondary_exclusions"] == 25
+    assert params["primary_exclusions"] == 100
+    assert params["sample_minimum"] == 200
