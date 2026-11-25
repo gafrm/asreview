@@ -196,6 +196,26 @@ class RISReader(BaseReader):
         df["first_authors"] = df["first_authors"].apply(convert_value_to_list)
         df["authors"] = df["authors"] + df["first_authors"]
 
+        # RIS publication years may include slash-separated date components.
+        # Preserve the raw bibliography and normalize only the internal year.
+        if "year" in df.columns:
+            df["year"] = df["year"].apply(
+                lambda value: re.sub(
+                    r"^([0-9]{4})/.*$", r"\1", value.strip()
+                )
+                if isinstance(value, str)
+                else value
+            )
+
+        # Coalesce alternative RIS title fields record by record.
+        if "primary_title" in df.columns:
+            if "title" not in df.columns:
+                df["title"] = df["primary_title"]
+            else:
+                df["title"] = df["title"].replace(
+                    r"^\s*$", None, regex=True
+                ).combine_first(df["primary_title"])
+
         return super().clean_data(df)
 
 
