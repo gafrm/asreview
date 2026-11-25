@@ -81,11 +81,30 @@ configuration; do not edit the state file to change an ongoing review.
    are separate protocol steps; they are not automated by this change.** A
    second-model pause does not mean that those steps have been completed.
 
-ASReview groups duplicate records. All SAFE denominators, samples, counters,
-and key-study checks use one representative per duplicate group. This avoids
-counting an inherited duplicate label as another independent screening decision.
-The interface reports this number as *screening units*; retain it with the
-original import count when reporting the review.
+## Optional duplicate grouping
+
+Before uploading a local dataset, uncheck **Automatically group duplicate
+records** if the bibliography has already been deduplicated externally. The
+default remains enabled for compatibility with ordinary ASReview projects.
+The choice is stored as `automatic_deduplication` in project.json and is
+locked at import. Existing projects retain their stored duplicate assignments;
+create a fresh project to change the policy. The creation API accepts the form
+field `automatic_deduplication` with the literal value `true` or `false`.
+Other import routes retain automatic grouping by default.
+
+When grouping is enabled, SAFE denominators, samples, counters and key-study
+checks use one representative per group. When disabled, each imported record
+is an independent screening unit and receives its own decision. The dataset
+statistics report persisted group assignments rather than recalculating them.
+Unicode letters and digits are retained in duplicate-text normalization, but
+automatic grouping remains a heuristic, not a substitute for adjudication.
+
+For the English scoping-review corpus, disable grouping after the reviewed
+BibDedupe procedure. The 12,340-record export originally received 12 additional
+automatic assignments, including five clearly distinct publications in
+non-Latin scripts. After Unicode normalization the count was seven; with
+grouping disabled the user confirmed no hidden duplicates in a fresh import.
+Retain the import count, policy and screening-unit count for reporting.
 
 ## Importing a seed list
 
@@ -192,16 +211,13 @@ conjunction, exact thresholds, sample extension, corrections, queue enforcement,
 export/reimport, and phase changes. The second-model integration test substitutes
 a small feature extractor for the large downloaded embedding model; it tests
 the phase/ranking machinery without downloading the pretrained weights. The
-full ELAS l2 model still requires a smoke test on the screening computer before
-production use.
+full ELAS l2 model was subsequently exercised successfully on the screening computer.
 
 Development validation used Linux, Python 3.12 and Node.js 24: 43 SAFE/matching
 unit/API tests and 18 React component tests passed. The 68 core regression tests
 passed during the initial SAFE implementation. The production
 frontend compiled, and an independently installed wheel successfully imported
-the SAFE backend and served the compiled interface. The cloud browser could not
-reach the local development server, so a visual browser check remains part of
-the installation smoke test.
+the SAFE backend and served the compiled interface. The initial cloud browser could not reach the local development server; later manual Windows tests confirmed the interface and seed exclusion dialog.
 
 
 ### Integration validation (November 2026)
@@ -221,11 +237,39 @@ audit of 14,347 records found no missing source-available fields among titles,
 abstracts, authors, years, primary DOIs, primary URLs and keywords; one URL was
 truncated at a semicolon during parsing. Multiple DOI/URL values are not fully
 represented by the scalar database schema. Retain the source bibliography.
-A persisted-database audit remains outstanding.
+A read-only SQLite audit of the 14,347-record project confirmed all records and seven metadata fields were preserved from reader output, with 107 harmless null-to-empty abstract conversions and zero substantive mismatches or structural integrity violations. This is separate from the known source-to-reader URL limitation.
 
 Known limitations: the upstream App.test.js suite fails to initialize with the
 react-markdown ESM dependency; this was reproduced in an unmodified upstream
 worktree. Dependency security advisories require assessment before shared
-deployment. The actual ELAS l2 model and visual seed highlighting require
-manual validation. These results are not a claim of complete production
+deployment. The actual ELAS l2 model and visual seed highlighting were subsequently verified in disposable Windows projects. These results are not a claim of complete production
 validation.
+
+
+### Additional validation and GPU setup (November 2026)
+
+CSV imports now accept UTF-8 with or without a byte-order mark. The 69 reader
+tests (including dedicated RIS/CSV tests) passed, with one skipped and two
+deselected. Optional grouping and Unicode changes passed 58 SAFE backend tests
+before the subsequent malformed-year validation and upload-request corrections;
+the user confirmed a fresh 12,340-record import with no hidden duplicates.
+Final combined regression and frontend request tests remain to be run.
+
+On the RTX 5070 Windows test machine, the CPU-only PyTorch installation was
+replaced with the compatible CUDA build using the following command in the
+existing virtual environment (driver 621.24):
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install "torch==2.14.1+cu130" --index-url https://download.pytorch.org/whl/cu130
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__, torch.cuda.is_available()); print(torch.ones(10, device='cuda'))"
+```
+
+This is the tested configuration, not a universal requirement. Select a
+compatible PyTorch build for other machines. Dory automatically selected
+cuda:0 and completed all four embedding batches in approximately 13 seconds
+on the synthetic 100-record trial. Both models and automatic secondary
+stopping were exercised. Manual amber highlighting and explicit exclusion
+confirmation were observed. Restart persistence and shutdown during active
+training still need separate verification. Do not expose a shared instance
+before reviewing dependency advisories.
