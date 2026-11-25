@@ -33,6 +33,29 @@ const criterionLabels = {
   streak: "Consecutive exclusions",
 };
 
+const defaultParameters = {
+  sample_minimum: 200,
+  sample_percent: 1,
+  estimate_multiplier: 2,
+  screened_percent: 10,
+  primary_exclusions: 100,
+  secondary_exclusions: 100,
+};
+
+const parameterFields = [
+  ["sample_minimum", "Minimum random sample records"],
+  ["sample_percent", "Random sample percentage"],
+  ["estimate_multiplier", "Estimated relevant total multiplier"],
+  ["screened_percent", "Minimum percentage screened"],
+  ["primary_exclusions", "Primary consecutive exclusions"],
+  ["secondary_exclusions", "Secondary consecutive exclusions"],
+];
+
+const validParameter = (key, value) =>
+  Number.isSafeInteger(Number(value)) &&
+  Number(value) >= 1 &&
+  (!key.endsWith("_percent") || Number(value) <= 100);
+
 const refreshQueries = (client, project_id) => {
   [
     "fetchStopping",
@@ -46,6 +69,10 @@ const refreshQueries = (client, project_id) => {
 
 export const SafeSetup = ({ project_id, onStarted }) => {
   const client = useQueryClient();
+  const [parameters, setParameters] = React.useState(defaultParameters);
+  const validParameters = parameterFields.every(([key]) =>
+    validParameter(key, parameters[key]),
+  );
   const [keyword, setKeyword] = React.useState("");
   const [keys, setKeys] = React.useState([]);
   const [noKeys, setNoKeys] = React.useState(false);
@@ -79,11 +106,12 @@ export const SafeSetup = ({ project_id, onStarted }) => {
         <Stack spacing={2}>
           <Typography variant="h6">SAFE automatic stopping</Typography>
           <Typography variant="body2">
-            Start with a random sample of at least 200 records or 1% of the
-            dataset, whichever is larger (up to the whole dataset). Continue
-            randomly until both relevant and irrelevant records are found. Then
-            use ELAS u4 with all four stopping conditions, followed by an ELAS
-            l2 check with a fresh counter of 100 exclusions.
+            Configure the thresholds before screening. The random sample uses
+            the larger of the minimum count and percentage (capped at the dataset
+            size), and continues until both relevance classes are present.
+            ELAS u4 requires all four primary criteria, including all selected
+            key studies marked relevant. ELAS l2 uses a fresh exclusion counter.
+            Parameters are locked when screening starts.
           </Typography>
           <Typography variant="body2">
             Enable this before adding prior knowledge or screening. Select the
@@ -91,6 +119,33 @@ export const SafeSetup = ({ project_id, onStarted }) => {
             list or the search field below; selecting a study does not label it.
             Duplicate groups count as one screening unit.
           </Typography>
+          {parameterFields.map(([key, label]) => (
+            <TextField
+              key={key}
+              label={label}
+              type="number"
+              value={parameters[key]}
+              disabled={configure.isLoading}
+              error={!validParameter(key, parameters[key])}
+              inputProps={{
+                min: 1,
+                step: 1,
+                ...(key.endsWith("_percent") ? { max: 100 } : {}),
+              }}
+              onChange={(event) =>
+                setParameters((previous) => ({
+                  ...previous,
+                  [key]: event.target.value,
+                }))
+              }
+            />
+          ))}
+          <Button
+            disabled={configure.isLoading}
+            onClick={() => setParameters(defaultParameters)}
+          >
+            Restore default thresholds
+          </Button>
           <SeedImport
             project_id={project_id}
             value={seedImport}
@@ -149,6 +204,7 @@ export const SafeSetup = ({ project_id, onStarted }) => {
               configure.isLoading ||
               importBusy ||
               unresolvedImport ||
+              !validParameters ||
               (!noKeys && allKeys.length === 0)
             }
             onClick={() =>
@@ -156,6 +212,9 @@ export const SafeSetup = ({ project_id, onStarted }) => {
                 project_id,
                 key_record_ids: allKeys.map((key) => key.record_id),
                 no_key_studies: noKeys,
+                parameters: Object.fromEntries(
+                  Object.entries(parameters).map(([key, value]) => [key, Number(value)]),
+                ),
                 ...(seedImport && {
                   seed_import: {
                     filename: seedImport.filename,
@@ -268,7 +327,7 @@ const SafeStopping = ({
                   }
                   color={check.met ? "success" : "default"}
                   variant={check.met ? "filled" : "outlined"}
-                  label={`${check.met ? "Met" : "Pending"}: ${criterionLabels[check.id]} ${check.value}/${check.target ?? "—"}`}
+                  label={`${check.met ? "Met" : "Pending"}: ${check.id === "estimate" && status.parameters ? `Screened: ${status.parameters.estimate_multiplier}× estimate` : check.id === "fraction" && status.parameters ? `Screened: ${status.parameters.screened_percent}%` : criterionLabels[check.id]} ${check.value}/${check.target ?? "—"}`}
                 />
               ))}
             </Stack>
@@ -278,7 +337,7 @@ const SafeStopping = ({
               {phaseNames[status.phase]} —{" "}
               {status.phase === "random"
                 ? `${status.sample_count} / ${status.sample_target} minimum sample`
-                : `${status.value} / 100 consecutive exclusions; all conditions required`}
+                : `${status.value} / ${status.params?.n ?? status.checks.find((check) => check.id === "streak")?.target ?? 100} consecutive exclusions; all conditions required`}
             </Typography>
           ) : (
             <SafeProgress status={status} />
