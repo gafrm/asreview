@@ -534,3 +534,97 @@ def test_custom_parameters_persist_and_cannot_be_reconfigured(review, tmp_path):
         assert restored_status["screened"] == 50
     finally:
         restored.close()
+
+
+@pytest.mark.parametrize("automatic", [True, False])
+def test_optional_duplicate_grouping(client_no_auth, tmp_path, automatic):
+    data = pd.DataFrame({
+        "title": ["Same publication", "Same publication", "Other publication"],
+        "abstract": ["Same abstract", "Same abstract", "Other abstract"],
+    })
+    response = client_no_auth.post(
+        "/api/projects/create",
+        data={
+            "mode": "oracle",
+            "automatic_deduplication": str(automatic).lower(),
+            "file": (BytesIO(data.to_csv(index=False).encode()), "duplicates.csv"),
+        },
+    )
+    assert response.status_code == 201, response.json
+    project_id = response.json["id"]
+    project = asr.Project(get_project_path(project_id), project_id=project_id)
+    url = f"/api/projects/{project_id}"
+    review = client_no_auth, project, url
+    try:
+        assert project.config["automatic_deduplication"] is automatic
+        stats = client_no_auth.get(url + "/data").json
+        assert stats["n_rows"] == 3
+        assert stats["n_duplicated"] == int(automatic)
+        assert stats["automatic_deduplication"] is automatic
+        with project.db as db:
+            groups = db.input[["record_id", "group_id"]]
+        assert groups["group_id"].nunique() == (2 if automatic else 3)
+        with pytest.raises(ValueError, match="locked"):
+            project.add_dataset("unused.csv", deduplicate=not automatic)
+        status = enable(review)
+        assert status["total"] == (2 if automatic else 3)
+        # The capped sample is the entire dataset, so each independent unit
+        # can be screened without initiating model training.
+        seen = set()
+        for _ in range(status["total"]):
+            record = client_no_auth.get(url + "/get_record").json["result"]
+            seen.add(record["record_id"])
+            screen(review, int(record["record_id"] == 0))
+        assert len(seen) == status["total"]
+        assert client_no_auth.get(url + "/stopping").json["exhausted"]
+        with project.db as db:
+            results = db.get_results_table(groups=True)
+            assert len(results) == 3
+            if not automatic:
+                decisions = dict(zip(results["record_id"], results["label"], strict=True))
+                assert decisions[0] == 1
+                assert decisions[1] == 0
+        export = tmp_path / "duplicates.asreview"
+        project.export(export)
+        restored = asr.Project.load(export, tmp_path / "restored_duplicates")
+        try:
+            assert restored.config["automatic_deduplication"] is automatic
+            assert safe.load(restored)["total"] == status["total"]
+            with restored.db as db:
+                assert db.input["group_id"].nunique() == status["total"]
+        finally:
+            restored.close()
+    finally:
+        project.close()
+
+
+def test_invalid_deduplication_policy(client_no_auth):
+    response = client_no_auth.post(
+        "/api/projects/create",
+        data={"mode": "oracle", "automatic_deduplication": "maybe"},
+    )
+    assert response.status_code == 400
+
+
+def test_unicode_titles_not_grouped_as_duplicates(client_no_auth):
+    data = pd.DataFrame({
+        "title": ["Български речник", "Гръцки заемки", "معجم اللغة العربية", "中國文學研究"],
+        "abstract": ["", "", "", ""],
+    })
+    response = client_no_auth.post(
+        "/api/projects/create",
+        data={
+            "mode": "oracle",
+            "file": (BytesIO(data.to_csv(index=False).encode()), "unicode.csv"),
+        },
+    )
+    assert response.status_code == 201, response.json
+    project_id = response.json["id"]
+    project = asr.Project(get_project_path(project_id), project_id=project_id)
+    try:
+        with project.db as db:
+            assert db.input["group_id"].nunique() == 4
+        stats = client_no_auth.get(f"/api/projects/{project_id}/data").json
+        assert stats["n_duplicated"] == 0
+    finally:
+        project.close()
