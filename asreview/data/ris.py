@@ -216,6 +216,44 @@ class RISReader(BaseReader):
                     r"^\s*$", None, regex=True
                 ).combine_first(df["primary_title"])
 
+        # Recover publication years from alternative RIS date fields.
+        def extract_year(value):
+            match = re.search(
+                r"(?<![0-9])([12][0-9]{3})(?![0-9])",
+                str(value),
+            )
+            return int(match.group(1)) if match else None
+
+        if "year" not in df.columns:
+            df["year"] = None
+
+        df["year"] = df["year"].apply(extract_year)
+
+        for column in ("publication_year", "date"):
+            if column in df.columns:
+                df["year"] = df["year"].combine_first(
+                    df[column].apply(extract_year)
+                )
+
+        # RIS URLs are parsed as lists; Record supports a single URL.
+        def first_url(value):
+            if isinstance(value, list):
+                return next(
+                    (v.strip() for v in value
+                     if isinstance(v, str) and v.strip()),
+                    None,
+                )
+            if isinstance(value, str):
+                return value.strip() or None
+            return None
+
+        if "urls" in df.columns:
+            urls = df["urls"].apply(first_url)
+            if "url" not in df.columns:
+                df["url"] = urls
+            else:
+                df["url"] = df["url"].apply(first_url).combine_first(urls)
+
         return super().clean_data(df)
 
 
