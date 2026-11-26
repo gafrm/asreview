@@ -863,8 +863,16 @@ def api_update_review_status(project):
     trigger_model = request.form.get("trigger_model", type=bool, default=False)
 
     current_status = project.config["review"]["status"]
+    procedure = request.form.get("screening_procedure")
+    state = safe.load(project)
+    if procedure not in (None, "standard", "safe"):
+        raise ValueError("Unknown screening procedure.")
+    if procedure == "safe" and not state:
+        raise ValueError("Configure SAFE before starting SAFE screening.")
+    if procedure == "standard" and state:
+        raise ValueError("Cannot start standard screening in a SAFE project.")
 
-    if state := safe.load(project):
+    if state:
         safe_status = safe.refresh(project, state)
         if status == "finished" and not (
             safe_status["exhausted"]
