@@ -174,7 +174,7 @@ test("secondary stop explicitly leaves independent quality control outstanding",
 });
 
 test("setup requires explicit key-study selection or an explicit empty list", async () => {
-  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random" }));
+  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random", model: "random", screened: 0 }));
   const started = jest.fn();
   await render(<SafeSetup project_id="test" onStarted={started} />);
   expect(button("Start SAFE screening").disabled).toBe(true);
@@ -241,7 +241,7 @@ const importSeeds = async (rows) => {
 };
 
 test("seed upload selects exact matches, deduplicates records and submits the audit", async () => {
-  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random" }));
+  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random", model: "random", screened: 0 }));
   await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
   const file = await importSeeds([seedRow(), seedRow({ id: 1 })]);
   expect(ProjectAPI.previewSeedImport).toHaveBeenCalledWith({
@@ -266,7 +266,7 @@ test("seed upload selects exact matches, deduplicates records and submits the au
 });
 
 test("missing seeds block starting until absence is explicitly recorded", async () => {
-  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random" }));
+  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random", model: "random", screened: 0 }));
   await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
   await importSeeds([
     seedRow(),
@@ -295,7 +295,7 @@ test("missing seeds block starting until absence is explicitly recorded", async 
 });
 
 test("an ambiguous seed can be resolved from its suggested records", async () => {
-  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random" }));
+  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random", model: "random", screened: 0 }));
   await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
   await importSeeds([seedRow({ status: "ambiguous", match: null })]);
   expect(button("Start SAFE screening").disabled).toBe(true);
@@ -332,7 +332,7 @@ test("matched records can be inspected and clearing the import removes their sel
 });
 
 test("an unmatched seed can be linked through a manual title search", async () => {
-  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random" }));
+  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random", model: "random", screened: 0 }));
   await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
   await importSeeds([
     seedRow({
@@ -398,7 +398,7 @@ const changeNumber = async (label, value) => {
 };
 
 test("custom thresholds are validated and sent as numbers", async () => {
-  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random" }));
+  ProjectAPI.configureSafe.mockResolvedValue(status({ phase: "random", model: "random", screened: 0 }));
   await render(<SafeSetup project_id="test" onStarted={jest.fn()} />);
   await act(async () => container.querySelector('input[type="checkbox"]').click());
   await changeNumber("Random sample percentage", 101);
@@ -455,4 +455,28 @@ test("compact tracker displays configured thresholds", async () => {
   expect(container.textContent).toContain("Screened: 3× estimate 200/150");
   expect(container.textContent).toContain("Screened: 25% 200/250");
   expect(container.textContent).toContain("7 / 15 consecutive exclusions");
+});
+
+test("unconfirmed SAFE startup does not navigate to screening", async () => {
+  ProjectAPI.configureSafe.mockResolvedValue({ status: "review" });
+  const started = jest.fn();
+  const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await render(<SafeSetup project_id="test" onStarted={started} />);
+    await act(async () => container.querySelector('input[type="checkbox"]').click());
+    await act(async () => button("Start SAFE screening").click());
+    expect(started).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("SAFE random calibration was not confirmed");
+  } finally {
+    errorSpy.mockRestore();
+  }
+});
+
+test("random calibration displays an explicit phase and counter", async () => {
+  await render(<SafeStopping project_id="test" compact status={status({
+    phase: "random", model: "random", sample_count: 24, sample_target: 200,
+  })} />);
+  expect(container.textContent).toContain("SAFE · Random calibration");
+  expect(container.textContent).toContain("Random calibration: 24 / 200");
+  expect(container.textContent).toContain("Active learning is disabled");
 });
