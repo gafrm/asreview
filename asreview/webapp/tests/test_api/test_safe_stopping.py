@@ -628,3 +628,40 @@ def test_unicode_titles_not_grouped_as_duplicates(client_no_auth):
         assert stats["n_duplicated"] == 0
     finally:
         project.close()
+
+
+def test_explicit_screening_procedure_cannot_silently_fallback(review):
+    client, project, url = review
+    response = client.put(
+        url + "/review", data={"status": "review", "screening_procedure": "safe"}
+    )
+    assert response.status_code == 400
+    assert safe.load(project) is None
+    assert safe.results(project).empty
+    enable(review)
+    response = client.put(
+        url + "/review", data={"status": "review", "screening_procedure": "standard"}
+    )
+    assert response.status_code == 400
+    assert safe.load(project)["phase"] == "random"
+
+
+def test_random_presentation_is_independent_of_labels(review, monkeypatch):
+    client, project, url = review
+    monkeypatch.setattr(safe.secrets, "randbits", lambda _: 42)
+    enable(review)
+    expected = np.random.default_rng(42).permutation(range(1000)).tolist()
+    assert safe.load(project)["random_order"] == expected
+    observed = []
+    for i in range(30):
+        payload = client.get(url + "/get_record").json
+        assert payload["stopping"]["phase"] == "random"
+        assert payload["stopping"]["model"] == "random"
+        assert payload["result"]["record_id"] == expected[i]
+        observed.append(screen(review, int(i % 3 == 0)))
+        if i in (0, 10, 20):
+            run_model(project)
+    assert observed == expected[:30]
+    assert safe.results(project)["record_id"].tolist() == observed
+    with project.db as db:
+        assert set(db.get_last_ranking_table()["querier"]) == {"random"}
