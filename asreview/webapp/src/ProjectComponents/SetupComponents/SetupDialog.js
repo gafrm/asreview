@@ -1,5 +1,9 @@
 import {
+  Alert,
   Box,
+  FormControlLabel,
+  Radio,
+  RadioGroup,
   Button,
   Collapse,
   Dialog,
@@ -104,6 +108,9 @@ const SetupDialog = ({ project_id, mode, open, onClose }) => {
 
   // state management
   const [showSettings, setShowSettings] = React.useState(false);
+  const [procedure, setProcedure] = React.useState("safe");
+  const [safeBusy, setSafeBusy] = React.useState(false);
+  const simulation = mode === projectModes.SIMULATION;
   const [feedbackBar, setFeedbackBar] = React.useState(null);
   const [simulationStarted, setSimulationStarted] = React.useState(false);
 
@@ -116,7 +123,7 @@ const SetupDialog = ({ project_id, mode, open, onClose }) => {
     },
   );
 
-  const { mutate: setStatus } = useMutation(ProjectAPI.mutateReviewStatus, {
+  const { mutate: setStatus, isLoading: startingStandard, isError: startError, error: standardError } = useMutation(ProjectAPI.mutateReviewStatus, {
     mutationKey: ["mutateReviewStatus"],
     onSuccess: () => {
       if (mode === projectModes.SIMULATION) {
@@ -142,7 +149,7 @@ const SetupDialog = ({ project_id, mode, open, onClose }) => {
             bgcolor: "background.default",
           },
         }}
-        onClose={onClose}
+        onClose={safeBusy || startingStandard ? undefined : onClose}
         TransitionProps={{
           onExited: () => {
             queryClient.invalidateQueries("fetchProjects");
@@ -155,6 +162,7 @@ const SetupDialog = ({ project_id, mode, open, onClose }) => {
             setSimulationStarted(false);
 
             setShowSettings(false);
+            setProcedure("safe");
           },
         }}
         closeAfterTransition={false}
@@ -191,10 +199,39 @@ const SetupDialog = ({ project_id, mode, open, onClose }) => {
                     </Box>
                   </Collapse>
 
-                  <SafeSetup
-                    project_id={data.id}
-                    onStarted={() => navigate(`/reviews/${data.id}/reviewer`)}
-                  />
+                  <RadioGroup
+                    aria-label="Screening procedure"
+                    value={procedure}
+                    onChange={(event) => {
+                      setProcedure(event.target.value);
+                      setShowSettings(false);
+                    }}
+                  >
+                    <FormControlLabel
+                      value="safe"
+                      control={<Radio disabled={safeBusy || startingStandard} />}
+                      label="SAFE screening (random calibration, then ELAS u4 and ELAS l2)"
+                    />
+                    <FormControlLabel
+                      value="standard"
+                      control={<Radio disabled={safeBusy || startingStandard} />}
+                      label="Standard ASReview screening (active learning)"
+                    />
+                  </RadioGroup>
+                  {procedure === "safe" ? (
+                    <SafeSetup
+                      key={data.id}
+                      project_id={data.id}
+                      onBusy={setSafeBusy}
+                      onStarted={() => navigate(`/reviews/${data.id}/reviewer`)}
+                    />
+                  ) : (
+                    <Alert severity="warning" sx={{ my: 2 }}>
+                      Standard screening is not SAFE. Relevance decisions can
+                      influence the next record before 200 records are screened.
+                      Do not use this procedure for SAFE calibration.
+                    </Alert>
+                  )}
                   <Box sx={{ textAlign: "center", my: 2 }}>
                     <Button onClick={() => setShowSettings(!showSettings)}>
                       {showSettings ? "Show dataset" : "Show options"}
@@ -207,19 +244,25 @@ const SetupDialog = ({ project_id, mode, open, onClose }) => {
                         mobileScreen={fullScreen}
                       />
                     </Box>
-                    <Box sx={{ my: 3 }}>
-                      <ModelCard mode={mode} />
-                    </Box>
-                    <Box sx={{ my: 3 }}>
-                      <PriorCard mode={mode} />
-                    </Box>
+                    {procedure === "standard" && (
+                      <>
+                        <Box sx={{ my: 3 }}>
+                          <ModelCard mode={mode} />
+                        </Box>
+                        <Box sx={{ my: 3 }}>
+                          <PriorCard mode={mode} />
+                        </Box>
+                      </>
+                    )}
                   </Collapse>
                 </>
               )}
             </DialogContent>
+            {startError && <Alert severity="error">{standardError?.message}</Alert>}
             <DialogActions>
-              <Button onClick={onClose}>Cancel</Button>
-              <Button
+              <Button disabled={safeBusy || startingStandard} onClick={onClose}>Cancel</Button>
+              {(simulation || procedure === "standard") && <Button
+                disabled={startingStandard}
                 onClick={() => {
                   setSimulationStarted(false);
                   if (mode === projectModes.SIMULATION) {
@@ -228,11 +271,12 @@ const SetupDialog = ({ project_id, mode, open, onClose }) => {
                   setStatus({
                     project_id: data?.id,
                     status: projectStatuses.REVIEW,
+                    ...(simulation ? {} : { screening_procedure: "standard" }),
                   });
                 }}
               >
-                {mode === projectModes.SIMULATION ? "Simulate" : "Screen"}
-              </Button>
+                {simulation ? "Simulate" : "Start standard screening"}
+              </Button>}
             </DialogActions>
           </ProjectContext.Provider>
         )}
