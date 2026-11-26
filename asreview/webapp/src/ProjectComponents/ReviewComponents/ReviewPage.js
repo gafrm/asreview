@@ -129,6 +129,12 @@ const ReviewPage = () => {
               compact={data?.status === "review"}
             />
           )}
+          {data?.status === "review" && currentStopping?.id !== "safe" && (
+            <Alert severity="warning" sx={{ my: 2 }}>
+              Standard ASReview screening — not SAFE. Active learning may
+              influence record selection.
+            </Alert>
+          )}
           {data?.status === "setup" && (
             <FinishSetup project_id={project_id} refetch={refetch} />
           )}
