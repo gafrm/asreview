@@ -1,5 +1,6 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
+import { createTheme, ThemeProvider } from "@mui/material/styles";
 import { QueryClient, QueryClientProvider } from "react-query";
 import { ProjectAPI } from "api";
 import { projectModes } from "globals.js";
@@ -42,7 +43,9 @@ test("SAFE is the default and only the selected procedure can be started", async
     await act(async () => {
       root.render(
         <QueryClientProvider client={client}>
+          <ThemeProvider theme={createTheme()}>
             <SetupDialog project_id="test" mode={projectModes.ORACLE} open onClose={() => {}} />
+          </ThemeProvider>
         </QueryClientProvider>,
       );
     });
