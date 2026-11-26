@@ -67,7 +67,7 @@ const refreshQueries = (client, project_id) => {
   ].forEach((name) => client.invalidateQueries([name]));
 };
 
-export const SafeSetup = ({ project_id, onStarted }) => {
+export const SafeSetup = ({ project_id, onStarted, onBusy }) => {
   const client = useQueryClient();
   const [parameters, setParameters] = React.useState(defaultParameters);
   const validParameters = parameterFields.every(([key]) =>
@@ -94,12 +94,24 @@ export const SafeSetup = ({ project_id, onStarted }) => {
     ProjectAPI.fetchPriorSearch,
     { enabled: keyword.length >= 2, refetchOnWindowFocus: false },
   );
-  const configure = useMutation(ProjectAPI.configureSafe, {
+  const configure = useMutation(async (payload) => {
+    const status = await ProjectAPI.configureSafe(payload);
+    if (status?.id !== "safe" || status.phase !== "random" ||
+        status.model !== "random" || status.screened !== 0 ||
+        !status.ready || status.paused) {
+      throw new Error("SAFE random calibration was not confirmed by the server. Do not start standard screening.");
+    }
+    return status;
+  }, {
     onSuccess: () => {
       refreshQueries(client, project_id);
       onStarted();
     },
   });
+  React.useEffect(() => {
+    onBusy?.(configure.isLoading || importBusy);
+    return () => onBusy?.(false);
+  }, [configure.isLoading, importBusy, onBusy]);
   return (
     <Card variant="outlined" sx={{ my: 3 }}>
       <CardContent>
@@ -305,8 +317,14 @@ const SafeStopping = ({
       <CardContent>
         <Stack spacing={2}>
           <Typography variant="h6">
-            SAFE {status.paused ? "· Screening paused" : "automatic stopping"}
+            SAFE {status.paused ? "· Screening paused" : status.phase === "random" ? "· Random calibration" : "automatic stopping"}
           </Typography>
+          {status.phase === "random" && (
+            <Alert severity="info">
+              Random calibration: {status.sample_count} / {status.sample_target}.
+              Active learning is disabled during this phase.
+            </Alert>
+          )}
           {status.phase !== "random" && (
             <Stack
               direction="row"
