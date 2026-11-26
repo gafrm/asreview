@@ -1,10 +1,13 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "react-query";
-import { MemoryRouter } from "react-router-dom";
 import { ProjectAPI } from "api";
 import { projectModes } from "globals.js";
 import SetupDialog from "./SetupDialog";
+
+jest.mock("react-router-dom", () => ({
+  useNavigate: () => jest.fn(),
+}), { virtual: true });
 
 jest.mock("api", () => ({
   ProjectAPI: {
@@ -39,9 +42,7 @@ test("SAFE is the default and only the selected procedure can be started", async
     await act(async () => {
       root.render(
         <QueryClientProvider client={client}>
-          <MemoryRouter>
             <SetupDialog project_id="test" mode={projectModes.ORACLE} open onClose={() => {}} />
-          </MemoryRouter>
         </QueryClientProvider>,
       );
     });
